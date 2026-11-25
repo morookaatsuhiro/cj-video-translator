@@ -1,0 +1,69 @@
+# CJ-VMT 模型角色表 v0.3.0
+# 这里只登记角色和候选。revision 在实际下载后填写 commit sha；
+# 标 "核对" 的许可证和能力，使用前由 Agent 查模型卡、研究者确认（H3）。
+# llm_lineage 用来判断“是否异家族”：评审和核验模型的开发方必须和 teacher 不同，
+# 并且至少 1 个评审的 llm_lineage 不是 qwen（很多开源多模态模型的语言骨干是 Qwen）。
+
+version: 0.3.0
+
+asr:
+  primary:
+    id: openai/whisper-large-v3
+    backend: faster-whisper
+    license: "宽松许可（GitHub 仓库写 MIT，Hugging Face 模型卡写 Apache-2.0；核对）"
+    revision: null
+    native_punctuation: true           # 标点由声学模型直接生成；P3 探针 A1 复核
+    decode: {language: ja, beam_size: 5, temperature: 0, condition_on_previous_text: false, word_timestamps: true}
+  secondary:
+    id: null                           # 候选：reazon-research/reazonspeech-nemo-v2、FunAudioLLM/SenseVoiceSmall、kotoba-tech/kotoba-whisper-v2.x
+    license: null                      # 核对
+    revision: null
+    native_punctuation: null           # P2 M2.2 核对；标点由纯文本后处理添加的系统填 false
+
+align: {id: null, note: "WhisperX 日语对齐模型或 stable-ts；P2 选定"}
+diarization: {id: pyannote/speaker-diarization-3.1, license: MIT, gated: true, revision: null}
+vad: {id: silero-vad, license: MIT}
+scene: {id: pyscenedetect, license: BSD-3-Clause}
+ocr: {id: paddleocr, langs: [ch, japan], license: Apache-2.0}
+ja_analysis: {tokenizer: "fugashi+unidic 或 sudachipy", zero_pronoun: "kwja（可选）"}
+f0: {tool: parselmouth, license: GPL-3.0, note: "只作为可选依赖或独立脚本调用；备选 pyworld（MIT）"}
+tts_probe: {tool: voicevox_engine, note: "只用于资格探针和 CF_A_tts；按角色条款署名，音频不再分发"}
+
+teacher:
+  id: Qwen/Qwen3-Omni-30B-A3B-Instruct
+  developer: alibaba-qwen
+  llm_lineage: qwen
+  license: Apache-2.0
+  revision: null
+  modalities: [text, video, audio]
+  disable_talker: true                 # 只要文本输出
+  media_input: separate                # separate：无音轨视频 + 独立 wav；P3 M3.1 可与 embedded 对比后改
+
+text_mt_strong:                        # 至少 2 个不同开发方；输出只作对照
+  - {id: null, developer: null, license: null, note: "候选：Apache-2.0 的通用 LLM（如 Qwen3.5 系列）"}
+  - {id: null, developer: null, license: null, note: "候选：Hy-MT2（核对日语覆盖和许可）"}
+text_mt_reference_only:
+  - {id: pfnet/plamo-3-translate-8b, developer: pfn, license: "PLaMo Community License（核对现行条款）",
+     use: "只作 P6 的强文本参照；输出不进入训练目标"}
+
+text_judges:                           # 读法归纳、读法映射、蕴含判断、预筛；不能是 teacher 本身
+  - {id: null, developer: null, llm_lineage: null}
+  - {id: null, developer: null, llm_lineage: null}
+
+mm_verifiers:                          # 线索描述（开放描述）；开发方不同于 teacher
+  - {id: null, developer: null, llm_lineage: null, modalities: [video], note: "候选：MiniCPM-o 4.5（语言骨干是 Qwen3-8B，记为 qwen 系）、GLM-V、Gemma 系、Phi-4-multimodal 等；核对许可"}
+
+jury:                                  # 至少 2 个；至少 1 个 llm_lineage != qwen；能处理被归因的模态
+  - {id: null, developer: null, llm_lineage: null, modalities: [video, audio]}
+  - {id: null, developer: null, llm_lineage: null, modalities: [video, audio]}
+
+qe:
+  primary: {id: Unbabel/wmt22-cometkiwi-da, license: CC-BY-NC-SA-4.0, gated: true}
+  alt: {id: google/metricx-24-hybrid-large-v2p6, license: Apache-2.0, mode: qe}
+metrics:
+  comet: {id: Unbabel/wmt22-comet-da, license: Apache-2.0}
+
+students:
+  main: {id: Qwen/Qwen2.5-Omni-7B, license: Apache-2.0, revision: null, modalities: [text, video, audio]}
+  aux: {id: Qwen/Qwen3-VL-8B-Instruct, license: Apache-2.0, revision: null, modalities: [text, video]}
+train_framework: {name: ms-swift, version: null, note: "以实际安装版本的文档和 examples/train/multimodal/omni 为准"}

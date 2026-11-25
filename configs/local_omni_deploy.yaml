@@ -1,0 +1,16 @@
+pipeline: qwen3_omni_moe_thinker_only
+distributed_executor_backend: mp
+stages:
+  - stage_id: 0
+    devices: "0"
+    tensor_parallel_size: 1
+    max_num_seqs: 1
+    max_model_len: 8192
+    gpu_memory_utilization: 0.77
+    kv_cache_memory_bytes: 2147483648  # 2 GiB for a single 8192-token request on the RTX 4090.
+    enforce_eager: true
+    async_scheduling: false
+    enable_prefix_caching: false
+    trust_remote_code: false
+    compilation_config:
+      custom_ops: ["+rotary_embedding"]

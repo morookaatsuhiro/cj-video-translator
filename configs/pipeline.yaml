@@ -1,0 +1,135 @@
+# CJ-VMT 流水线配置 v0.3.0
+# 这是全部阈值的唯一来源。文档里只写键名，数值以本文件为准。
+# 标 "待校准" 的是默认起点，只能在试点或 dev 数据上调整；每次调整都写进 docs/decision_log.md。
+
+version: 0.3.0
+seed: 2026
+
+text:
+  # text_neutral：把这些字符（连续出现算一处）统一换成 neutralize_to
+  neutralize_chars: "？?！!…‥"
+  neutralize_to: "。"
+
+context:
+  policy_prev: prev3_within30s_v1      # 主策略：只用前文
+  prev_turns: 3
+  prev_window_ms: 30000
+  policy_full: prev3_next2_within30s_v1  # 只用于 future_context_sufficient 标记
+  next_turns: 2
+  next_window_ms: 30000
+  speaker_tag_min_conf: 0.6            # 低于此值的说话人标签写成 "?"
+
+segment:
+  min_dur_ms: 300
+  max_dur_ms: 12000
+  min_chars: 1                         # 去掉标点后的字符数
+  max_chars: 80
+
+clip:
+  pre_pad_ms: 3000
+  post_pad_ms: 1000
+  max_window_ms: 15000
+  long_side_px: 720
+  audio_gate_margin_ms: 200            # 台词起止各留的余量；窗口外静音
+  audio_fade_ms: 20
+  audio_sr: 16000
+
+video_input:
+  # teacher、核验、评审共用；所有条件必须一致
+  fps: 2                               # 待校准：P3 M3.1 比较 2 和 4
+  max_frames: 32
+  max_pixels_per_frame: 200704         # 448*448
+  verify_fps: 4                        # 线索核验时在线索区间内加密采样
+
+asr:
+  lang_prob_min: 0.80                  # 源语言必须是日语
+  compression_ratio_max: 2.4
+  avg_logprob_min: -1.0
+  no_speech_prob_max: 0.6
+  repeat_ngram: 3
+  repeat_count: 4
+  tau_core: 0.08                       # 待校准：core 的双路读音 CER 上限
+  tau_train: 0.15                      # 待校准：进入训练集的上限
+
+diar:
+  speaker_conf_min: 0.6
+
+ocr:
+  fps: 2
+  subtitle_band_bottom: 0.35           # 画面底部这一比例视为字幕区
+  min_persist_ms: 500
+  source_caption_sim_min: 0.6          # 屏幕日文与台词读音的相似度
+
+mining:
+  random_baseline_rate: 0.10           # 扩量阶段：非候选样本中抽这么多跑全部条件
+  control_per_core_candidate: 1.0      # control 候选数 / core 候选数
+  short_utt_chars: 8
+
+teacher:
+  temperature: 0
+  max_new_tokens: 128
+  json_retry: 1
+  timeout_s: 120
+
+verify:
+  map_judges: 2                        # 读法映射评审数；两者一致才采用
+  jury_min_models: 2
+  jury_min_non_qwen_lineage: 1         # 至少 1 个评审的语言模型骨干不是 Qwen 系
+  jury_orders: [AB, BA]
+  cf_near_min_gap_ms: 30000
+  diag_subsample: 300                  # 噪声底诊断的抽样数
+  cf_audio_tts_enabled: false          # 需要 TTS 引擎；关闭时非语调类音频线索标 not_tested
+
+objective:                             # 通道 O：只用可测量信号判定
+  enabled: true
+  types: [question_intonation]
+  asr_qmark_systems_min: 2             # 至少这么多套“原生标点”的 ASR 都给出问号
+  f0:
+    floor_hz: 75
+    ceiling_hz: 600
+    time_step_s: 0.01
+    final_window_ms: 400
+    min_voiced_frames: 8
+    rise_delta_st: 2.0                 # 待校准：末段音高升幅（半音）达到此值判为升调
+    fall_delta_st: -1.0                # 待校准：低于此值判为降调
+
+bucket:
+  text_prior_support_max: 0.34         # 纯文本系统中给出目标读法的比例上限（3 个系统里最多 1 个）
+
+target:
+  len_ratio_min: 0.3                   # 中文字符数 / 日文字符数；待校准
+  len_ratio_max: 3.0
+  trad_ratio_max: 0.05
+  qe_min: null                         # P4 在 WMT25 日→中人工评分上校准后填写
+
+split:
+  order: [test, dev, train]
+  test_frac: 0.15                      # 起点；P5 按 core-test 目标倒推后可改
+  dev_frac: 0.10
+  core_test_target: 250
+
+audit:                                 # H5 抽检
+  n_core: 100
+  n_general: 25
+  n_control: 25
+  core_precision_min: 0.75
+  core_precision_ci_low_min: 0.65
+
+qualification:                         # teacher 资格测试的建议门槛（成对准确率）
+  paired_acc_min: 0.50
+  paired_acc_ci_low_min: 0.40
+
+diagnostics:                           # 建议门槛；达不到就先修规则或换模型
+  jury_position_consistency_min: 0.80
+  jury_wrongvideo_unanimous_max: 0.15
+  cf_noise_max: 0.10
+  verifier_false_yes_max: 0.15
+  teacher_json_ok_min: 0.98
+
+budget:                                # 超过即先在 docs/HUMAN_TASKS.md 请研究者确认
+  max_model_calls_without_approval: 5000
+  max_api_cost_without_approval_cny: 200
+  download_confirm_mb: 500
+
+runtime:
+  decode_timeout_s: 60                 # 媒体解码放在子进程里，超时即杀掉并拒收

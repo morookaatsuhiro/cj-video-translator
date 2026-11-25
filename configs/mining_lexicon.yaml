@@ -1,0 +1,45 @@
+# 规则挖掘词表 v0.3.0
+# 用途：只用来排处理优先级和做分层统计，不直接决定分桶。
+# 匹配对象：去掉标点后的 text_neutral。pattern 是正则；full=true 表示整句匹配。
+# readings_hint 是示意，不是答案；真正的读法由 S9a 生成。
+# 这份词表是起点，P3 试点后按“命中样本的 core 产出率”增删，改动记入 decision_log。
+
+version: 0.3.0
+
+lexical:
+  - {id: ii_kekkou, full: true, pattern: "(いい(です)?(よ|わ|ね)?|結構です|大丈夫(です)?(よ)?)", types: [speech_act],
+     readings_hint: ["好啊／可以", "不用了／算了"]}
+  - {id: sumimasen, full: true, pattern: "(すみません|すいません)(でした)?", types: [speech_act],
+     readings_hint: ["对不起", "谢谢，麻烦你了", "劳驾／打扰一下"], note: "“不好意思”可能是中性译法"}
+  - {id: doumo, full: true, pattern: "(どうも)(ありがとう)?", types: [speech_act], readings_hint: ["谢谢", "你好", "抱歉"]}
+  - {id: douzo, full: true, pattern: "(どうぞ)", types: [speech_act, scene_event], readings_hint: ["请进", "请用", "给你", "您先请"]}
+  - {id: shitsurei, full: true, pattern: "(失礼します|失礼しました)", types: [speech_act, scene_event],
+     readings_hint: ["打扰了（进门）", "我先告辞了（离开）", "失陪一下"]}
+  - {id: hai, full: true, pattern: "(はい)", types: [speech_act, question_intonation], readings_hint: ["好的／是的", "给（递东西）", "什么？（没听清）", "到（点名）"]}
+  - {id: chotto, full: true, pattern: "(ちょっと)", types: [speech_act], readings_hint: ["稍等一下", "不太方便（委婉拒绝）", "喂（叫住对方）"]}
+  - {id: yabai, full: false, pattern: "(やばい|ヤバい|やばっ)", types: [emotion_prosody], readings_hint: ["糟了／完了", "太厉害了／绝了"]}
+  - {id: sugoi_irony, full: true, pattern: "(すごい(ね|な)?|さすが(だね|ですね)?)", types: [emotion_prosody], readings_hint: ["真厉害（称赞）", "可真行啊（讽刺）"]}
+  - {id: baka, full: true, pattern: "(バカ|ばか|馬鹿)", types: [emotion_prosody], readings_hint: ["笨蛋（骂）", "傻瓜（亲昵）"]}
+  - {id: sou_desu_ka, full: true, pattern: "(そう(ですか|なんだ|なの)?)", types: [question_intonation], readings_hint: ["是吗？", "这样啊。"]}
+  - {id: janai, full: false, pattern: "(じゃない|じゃん)$", types: [question_intonation], readings_hint: ["不是……吗？／挺……的嘛", "不……"]}
+  - {id: deshou, full: false, pattern: "(でしょう|だろう|でしょ|だろ)$", types: [question_intonation], readings_hint: ["……对吧？", "大概……吧。"]}
+
+light_verbs:   # 宾语省略时，中文必须选具体动词
+  - {id: kakeru, pattern: "(かけ(て|る|た|ます|ました))", types: [polysemy, scene_event], readings_hint: ["打（电话）", "戴上（眼镜）", "锁上", "挂上", "浇上"]}
+  - {id: tsukeru, pattern: "(つけ(て|る|た|ます|ました))", types: [polysemy, scene_event], readings_hint: ["打开（灯、电视）", "戴上", "涂上", "蘸"]}
+  - {id: kiru, pattern: "(切(って|る|った|ります))", types: [polysemy, scene_event], readings_hint: ["切／剪", "关掉（电源）", "挂断（电话）"]}
+  - {id: kesu, pattern: "(消(して|す|した|します))", types: [polysemy, scene_event], readings_hint: ["关掉", "擦掉", "删除"]}
+  - {id: toru, pattern: "(取(って|る|った|ります)|とって)", types: [polysemy, scene_event], readings_hint: ["拿／递", "摘下", "拍（照）"]}
+  - {id: dasu, pattern: "(出(して|す|した|します))", types: [polysemy, scene_event], readings_hint: ["拿出来", "交上来", "寄出去"]}
+  - {id: ochiru, pattern: "(落ち(た|る|ました))", types: [polysemy, scene_event], readings_hint: ["掉了", "落榜了", "掉线了"]}
+
+structural:    # 由日语分析工具打标签，不用正则
+  - {id: short_utt, rule: "去标点后字符数 <= mining.short_utt_chars", types: []}
+  - {id: zero_subject, rule: "谓语的主语被省略（KWJA 或 GiNZA）", types: [ellipsis, reference]}
+  - {id: third_person_zero, rule: "引用或传闻句（って言ってた、らしい、そうだ）且主语被省略", types: [ellipsis, reference]}
+  - {id: kosoa, rule: "含 これ/それ/あれ/この/その/あの/ここ/そこ/あそこ", types: [reference], note: "中文“这个/那个”常是中性译法，预期多数进 general"}
+  - {id: giving_receiving, rule: "含授受动词 あげる/くれる/もらう 及其敬语形", types: [ellipsis]}
+  - {id: decl_form_no_q, rule: "句末没有 か/かい/かな/かしら/っけ，且句中没有疑问词", types: [question_intonation], note: "通道 O 的形式条件"}
+
+wh_words: [何, なに, なん, 誰, だれ, どこ, いつ, どう, どれ, どの, どんな, なぜ, どうして, いくら, いくつ, どっち, どちら]
+question_particles_final: [か, かい, かな, かしら, っけ]

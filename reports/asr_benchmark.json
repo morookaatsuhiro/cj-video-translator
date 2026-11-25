@@ -1,0 +1,196 @@
+{
+  "date": "2026-11-25",
+  "server": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "vram_mib": 49140
+  },
+  "whisper": {
+    "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+    "runtime": "faster-whisper CUDA FP16",
+    "engine": "whisper",
+    "load_sec": 2.69,
+    "vram_mib": 4404,
+    "zh_FLEURS": {
+      "samples": 10,
+      "chars": 367,
+      "errors": 26,
+      "cer": 7.08,
+      "median_ms": 402.6,
+      "p95_ms": 815.7,
+      "audio_total_sec": 119.68,
+      "rtf": 0.037,
+      "ids": [
+        "fleurs_cmn_hans_cn_1906",
+        "fleurs_cmn_hans_cn_2006",
+        "fleurs_cmn_hans_cn_1883",
+        "fleurs_cmn_hans_cn_1852",
+        "fleurs_cmn_hans_cn_1734",
+        "fleurs_cmn_hans_cn_1890",
+        "fleurs_cmn_hans_cn_1721",
+        "fleurs_cmn_hans_cn_1869",
+        "fleurs_cmn_hans_cn_1805",
+        "fleurs_cmn_hans_cn_1965"
+      ]
+    },
+    "ja_FLEURS": {
+      "samples": 10,
+      "chars": 443,
+      "errors": 24,
+      "cer": 5.42,
+      "median_ms": 423.9,
+      "p95_ms": 596.2,
+      "audio_total_sec": 110.04,
+      "rtf": 0.04,
+      "ids": [
+        "fleurs_ja_jp_1828",
+        "fleurs_ja_jp_1834",
+        "fleurs_ja_jp_1813",
+        "fleurs_ja_jp_1869",
+        "fleurs_ja_jp_1744",
+        "fleurs_ja_jp_1731",
+        "fleurs_ja_jp_1910",
+        "fleurs_ja_jp_1771",
+        "fleurs_ja_jp_1764",
+        "fleurs_ja_jp_2003"
+      ]
+    },
+    "zh_WMT26": {
+      "samples": 6,
+      "chars": 578,
+      "errors": 141,
+      "cer": 24.39,
+      "median_ms": 973.3000000000001,
+      "p95_ms": 1373.2,
+      "audio_total_sec": 177.94,
+      "rtf": 0.034,
+      "ids": [
+        "media_00326",
+        "media_00340",
+        "media_00311",
+        "media_00356",
+        "media_00368",
+        "media_00329"
+      ]
+    },
+    "names": [
+      {
+        "elapsed_ms": 271.1,
+        "terms_found": [
+          "河南省"
+        ],
+        "text": "我来自于河南省奈阳市汤鹤县",
+        "prompted": false
+      },
+      {
+        "elapsed_ms": 523.4,
+        "terms_found": [
+          "河南省",
+          "南阳市",
+          "唐河县"
+        ],
+        "text": "我来自于河南省、南阳市、唐河县。",
+        "prompted": true
+      }
+    ]
+  },
+  "qwen": {
+    "revision": "bcd2b5b7f32b480ab5790554cfa8347f246a14f3",
+    "runtime": "Transformers 5.19.0 CUDA BF16",
+    "engine": "qwen",
+    "load_sec": 6.38,
+    "vram_mib": 5156,
+    "torch_peak_reserved_mib": 4688.0,
+    "zh_FLEURS": {
+      "samples": 10,
+      "chars": 367,
+      "errors": 35,
+      "cer": 9.54,
+      "median_ms": 395.85,
+      "p95_ms": 855.5,
+      "audio_total_sec": 119.68,
+      "rtf": 0.038,
+      "ids": [
+        "fleurs_cmn_hans_cn_1906",
+        "fleurs_cmn_hans_cn_2006",
+        "fleurs_cmn_hans_cn_1883",
+        "fleurs_cmn_hans_cn_1852",
+        "fleurs_cmn_hans_cn_1734",
+        "fleurs_cmn_hans_cn_1890",
+        "fleurs_cmn_hans_cn_1721",
+        "fleurs_cmn_hans_cn_1869",
+        "fleurs_cmn_hans_cn_1805",
+        "fleurs_cmn_hans_cn_1965"
+      ]
+    },
+    "ja_FLEURS": {
+      "samples": 10,
+      "chars": 443,
+      "errors": 20,
+      "cer": 4.51,
+      "median_ms": 467.45000000000005,
+      "p95_ms": 958.4,
+      "audio_total_sec": 110.04,
+      "rtf": 0.047,
+      "ids": [
+        "fleurs_ja_jp_1828",
+        "fleurs_ja_jp_1834",
+        "fleurs_ja_jp_1813",
+        "fleurs_ja_jp_1869",
+        "fleurs_ja_jp_1744",
+        "fleurs_ja_jp_1731",
+        "fleurs_ja_jp_1910",
+        "fleurs_ja_jp_1771",
+        "fleurs_ja_jp_1764",
+        "fleurs_ja_jp_2003"
+      ]
+    },
+    "zh_WMT26": {
+      "samples": 6,
+      "chars": 578,
+      "errors": 51,
+      "cer": 8.82,
+      "median_ms": 1212.0,
+      "p95_ms": 1525.9,
+      "audio_total_sec": 177.94,
+      "rtf": 0.041,
+      "ids": [
+        "media_00326",
+        "media_00340",
+        "media_00311",
+        "media_00356",
+        "media_00368",
+        "media_00329"
+      ]
+    },
+    "names": [
+      {
+        "elapsed_ms": 266.1,
+        "terms_found": [
+          "河南省",
+          "南阳市",
+          "唐河县"
+        ],
+        "text": "讲我的家乡方言，我来自于河南省南阳市唐河县。",
+        "prompted": false
+      },
+      {
+        "elapsed_ms": 269.0,
+        "terms_found": [
+          "河南省",
+          "南阳市",
+          "唐河县"
+        ],
+        "text": "讲我的家乡方言，我来自于河南省南阳市唐河县。",
+        "prompted": true
+      }
+    ]
+  },
+  "datasets": {
+    "FLEURS": "First ten distinct prompt IDs in the official test archive per language (ja_jp and cmn_hans_cn), scored against the paired TSV transcript.",
+    "WMT26": "Existing local human source transcripts for six media examples at prepared corpus zero-based indices 0, 16, 32, 48, 64 and 80.",
+    "Names": "First 4.28 seconds of the local Wikitongues Henan Chinese example, evaluated on written place names."
+  },
+  "cer": "Pooled Levenshtein edits against NFKC-normalized alphanumeric characters after case folding.",
+  "latency": "Single warmed pass per file, nearest-rank p95, measured per engine without translation.",
+  "vram": "Peak observed NVIDIA process memory at 120 ms sampling intervals; Qwen also reports torch reserved memory."
+}

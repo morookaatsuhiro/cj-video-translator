@@ -1,0 +1,225 @@
+# CJ-VMT 结课版（MVP）配置 mvp-0.1
+# 结课版的全部数值都从这里读取。改动默认值时在 docs/decision_log.md 记一条。
+# 完整计划用的 pipeline.yaml、models.yaml 等，结课版不读取。
+
+version: mvp-0.1
+seed: 2026
+
+paths:
+  raw_own: data/raw/own
+  external: data/external
+  processed: data/processed
+  pilot: data/pilot
+  results: results
+  reports: reports
+  cache: .cache/cjvmt
+
+asr:
+  language_min_probability: 0.6
+  backend: faster-whisper      # faster-whisper | hf-whisper（transformers 版，RTX 50 系上 faster-whisper 报错时用）| sensevoice-small
+  hf_model: openai/whisper-large-v3-turbo   # backend 为 hf-whisper 时用
+  model: large-v3              # 开发和测试时可改成 small
+  device: auto                 # auto / cuda / cpu
+  compute_type: float16        # 用 CPU 时改成 int8
+  cpu_threads: 4              # 本机 GPU 需要为全模态模型预留显存
+  beam_size: 5
+  vad_filter: true
+  word_timestamps: true
+  condition_on_previous_text: false
+  lang: {ja2zh: ja, zh2ja: zh}
+  halluc_compression_ratio_max: 2.4
+  halluc_avg_logprob_min: -1.0
+  halluc_no_speech_prob_max: 0.6
+  recheck:
+    low_logprob: -0.72
+    trusted_logprob: -0.55
+    min_gain: 0.12
+    min_similarity: 0.84
+    glossary_min_similarity: 0.75
+    min_coverage: 0.90
+    hotword_score_drop: 0.08
+    beam_size: 3
+    prompt_chars: 120
+    max_hotwords_chars: 160
+
+segment:
+  pause_ms: 600                # 停顿不短于这个值就切句
+  max_chars: {ja: 40, zh: 30}
+  max_dur_ms: 10000
+  min_dur_ms: 300
+  final_punct: "。？！?!"
+  neutralize_chars: "？?！!…‥"   # text_neutral：这些字符每处换成“。”
+  neutralize_to: "。"
+
+context:
+  prev_turns: 3
+  prev_window_ms: 30000
+
+clip:
+  pre_pad_ms: 3000
+  post_pad_ms: 1000
+  max_window_ms: 15000
+  audio_gate_margin_ms: 200
+  audio_fade_ms: 20
+  audio_sr: 16000
+  long_side_px: 720
+  decode_timeout_s: 120        # ffmpeg 子进程超时
+
+video_input:                   # 所有条件、所有模型调用都一样
+  fps: 2.0
+  max_pixels: 200704           # 448*448；显存不够时降到 50176（224*224）
+  doc_fps: 1.0                 # 整段模式（WMT 视频约 30 秒）用更低的帧率
+  doc_max_pixels: 100352
+  av_full_mode: interleaved    # T+V+A：门控音频封装进无声画面（clips_av），use_audio_in_video=True
+
+models:
+  omni:
+    backend: qwen_omni
+    id: Qwen/Qwen2.5-Omni-7B
+    revision: null             # 下载后填写 commit sha
+    dtype: bfloat16
+    attn_implementation: sdpa   # 没装 flash-attn 或用 RTX 50 系时改成 sdpa
+    disable_talker: true
+    alternatives:              # 显存不够时按顺序尝试；换了要记入 decision_log
+      - Qwen/Qwen2.5-Omni-7B-AWQ
+      - Qwen/Qwen2.5-Omni-7B-GPTQ-Int4
+      - Qwen/Qwen2.5-Omni-3B
+  api:
+    enabled: false             # 默认不用；启用前按 AGENTS.md §11 核对条款
+    backend: openai_compat
+    base_url_env: OPENAI_COMPAT_BASE_URL
+    api_key_env: OPENAI_COMPAT_API_KEY
+    model_env: OPENAI_COMPAT_MODEL
+    stream: true               # 阿里云百炼的 Qwen-Omni 要求流式调用
+  comet:
+    id: Unbabel/wmt22-comet-da
+    batch_size: 16
+
+decode:
+  do_sample: false
+  max_new_tokens: {line: 128, doc: 1024}
+  doc_retry: 1                 # 整段输出行数不对时重试的次数；之后逐行回退
+
+prompt_modes:                  # 见 AGENTS.md §7.6；比较只能在同一模式内做
+  default: compare
+  available: [compare, guided, perceive]
+  guided_applies_to: [T+A, T+V, T+V+A]   # “只看文字”加提醒没有意义
+  perceive_max_new_tokens: 96
+
+conditions:
+  must: [T_neutral, T_asr, T+A, T+V, T+V+A]
+  should: [T+A_shuf, T+V_shuf]
+  could: [T+V+A_sep, A_only, V+A_only, T_asr+desc_auto]
+  # 每个条件给模型的输入见 AGENTS.md §7.6；错配条件从另一个视频取媒体，用 seed 固定
+
+realtime:                      # 句级实时，见 AGENTS.md §7.13 和 docs/realtime_design.md
+  language_probe_sec: 1
+  language_max_speech_sec: 8
+  input: file_sim              # file_sim（模拟直播，必须）| webcam（摄像头和麦克风）| cloud_api（云端实时接口，备选）
+  sr: 16000
+  vad: {backend: silero, threshold: 0.5, min_silence_ms: 600, speech_pad_ms: 100, chunk_samples: 512}
+  ring_buffer_sec: 20
+  frame_fps: 2.0               # 送进缓存的画面帧率
+  frame_max_side_px: 448
+  pre_context_sec: 3.0         # 句子开始前多少秒的画面
+  max_frames: 12
+  max_utt_sec: 12              # 一直没有停顿就在这里强制切句
+  asr_beam_size: 1            # Silero 已经切句，实时识别采用单束解码
+  asr_backend: faster-whisper  # 太慢就换 sensevoice-small；RTX 50 系上报错就换 hf-whisper
+  two_pass: true               # 先出只看文字的译文，再用多模态译文替换，并标出是否改变
+  media_mode: separate         # 实时：帧图片列表 + 音频文件分开传；事后补跑用 interleaved
+  queue_max: 3                 # 积压超过这么多句就跳过第二遍，并记录
+  log_latency: true
+
+tone:                          # 语气保留，见 docs/tone_preservation.md 和 AGENTS.md §7.14
+  text_level: true             # 文字层：感知第 4 题 + 翻译时保留语气，不加新模型
+  labels: [平静, 开心, 兴奋, 亲切, 生气, 不耐烦, 惊讶, 怀疑, 讽刺, 撒娇, 犹豫, 难过, 害怕, 不确定]
+  strengths: [弱, 中, 强]
+  acoustic_emotion: {enabled: false, backend: sensevoice-small}   # 可选：声学情绪标签，作第二意见
+
+tts:                           # 语音层：带语气的译文语音（可选）
+  enabled: true
+  backend: cosyvoice2          # 以官方仓库为准；装在单独的 Python 3.10 环境里，作为独立进程调用
+  model: CosyVoice2-0.5B
+  mode: instruct_clone         # 原句声音作音色参考 + 语气指令
+  ref_audio_min_sec: 3.0       # 原句太短时改用同一说话人更长的一段，或固定参考音色
+  max_speedup: 1.3             # 配音比原句长时最多加速到这个倍数
+  sample_rate: 24000
+  timeout_sec: 600
+  realtime_play: after_subtitle
+  label_ai_generated: true     # 页面和视频里标明“AI 合成”
+  intonation:                  # CREPE tiny 测原声基频，WORLD 迁移句级升降走势
+    enabled: true
+    frame_ms: 10
+    min_f0_hz: 55
+    max_f0_hz: 550
+    min_periodicity: 0.35
+    silence_db: -50
+    min_voiced_ms: 180
+    smooth_ms: 500
+    strength: 0.7
+    max_shift_semitones: 2.5
+  eval_emotion: {enabled: false, backend: emotion2vec_plus_large}
+
+eval:
+  wmt26:
+    repo: wmt-conference/wmt26-general-mt
+    text_path: data/wmt26-genmt.jsonl
+    media_release_tag: humeval
+    media_file: multimodal_inputs.zip
+    src_lang: zho_Hans
+    tgt_lang: jpn_Jpan
+    domain: speech
+    expect:                    # 来自课程汇报的统计；复现不了先查原因，不能改数字
+      docs_zh_ja: 190
+      speech: 114
+      social: 48
+      social_with_screenshot: 42
+      news: 28
+      speech_gold_lines: 662
+      docs_gold_ref_line_match: 114
+      gold_question_lines: 129
+      asr_qmark_same_pos: 92
+      asr_qmark_missing: 19
+      asr_qmark_misaligned: 18
+  wmt25:
+    repo: wmt-conference/wmt25-general-mt
+    text_path: data/wmt25-genmt.jsonl
+    src_lang: ja
+    tgt_lang: zh_CN
+    domain: speech
+    expect: {speech_docs: 59}
+  subset_size_if_short: 40     # GPU 时间不够时，用 seed 抽这么多段先跑
+  zh_question_markers:         # 问句分层 Q1–Q5：按 q1→q4 的顺序判定，都不符合的是 Q5（只靠语调）。规则是启发式的
+    q1_tag_endings: ["对吧", "是吧", "好吗", "行吗", "可以吗", "对不对", "好不好", "怎么样", "是不是"]
+    q2_final_particles: ["吗", "么", "呢", "吧", "嘛"]
+    q3_a_not_a_regex: "([\\u4e00-\\u9fff])[不没]\\1|是不是|有没有|能不能|要不要|会不会|可不可以"
+    q4_wh_words: ["什么", "啥", "谁", "哪", "怎么", "怎样", "为什么", "为啥", "几", "多少", "多久", "多大"]
+  onscreen:                    # 画面字幕检查
+    ocr_backend: paddleocr
+    every_sec: 2
+    frames_if_short: 3         # 时间不够时每段视频只抽这么多帧
+    kana_regex: "[\\u3040-\\u30ff]"   # 出现假名即判为有日文字幕
+  bootstrap_n: 10000
+  min_cell_n: 20               # 少于这个数的格子标“样本太少”
+
+pilot:                         # 这次不做（交差版不建数据集），结课后再用
+  phenomena: [question, style]
+  export_labels: [helped_by_audio, helped_by_video, helped_by_both, misled]
+  label_tier: auto_raw
+  source_use: eval_only
+
+demo:
+  host: 127.0.0.1
+  port: 7860                   # AutoDL 上可改成其“自定义服务”开放的端口
+  live_max_sec: 120
+
+figures:
+  size_px: [1600, 900]
+  font: Noto Sans CJK SC
+  colors: ["#009A44", "#E78047", "#5B6660"]   # 与课程汇报一致
+
+budget:
+  download_confirm_mb: 500
+  gpu_hours_confirm: 5
+  api_cost_confirm_cny: 100

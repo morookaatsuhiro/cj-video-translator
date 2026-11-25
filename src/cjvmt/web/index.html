@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f8">
+  <title>CJ-VMT · 中日多模态翻译</title>
+  <link rel="stylesheet" href="./app.css?v=20261125-speakers">
+  <script id="app-data" type="application/json">__CJVMT_DATA__</script>
+  <script defer src="./webcam.js?v=20261125-progress"></script>
+  <script defer src="./app.js?v=20261125-speakers"></script>
+</head>
+<body>
+  <header class="top"><div class="shell top-inner">
+    <a class="brand" href="./index.html"><span class="brand-icon" aria-hidden="true">文</span> CJ<span>—</span>VMT</a>
+    <nav aria-label="工作区">
+      <button type="button" data-tab="live">实时翻译</button>
+      <button type="button" data-tab="replay">结果回放</button>
+      <button type="button" data-tab="experiment" hidden>对照实验</button>
+    </nav>
+  </div></header>
+  <main class="shell">
+    <p class="banner" id="mock-notice" hidden>Mock 示例，不是真实结果</p>
+    <div class="job-progress" id="job-progress" hidden>
+      <div class="job-progress-heading">
+        <strong id="job-phase" role="status"></strong>
+        <span id="job-percent"></span>
+      </div>
+      <progress id="job-bar" aria-labelledby="job-phase"></progress>
+      <p class="subtle" id="job-progress-detail"></p>
+    </div>
+    <section id="live" hidden>
+      <div class="setup">
+        <div class="workspace-heading"><h1>中日视频翻译</h1><span class="subtle" id="input-limit"></span></div>
+        <form id="job-form">
+          <fieldset class="source-tabs"><legend class="visually-hidden">视频来源</legend>
+            <label><input type="radio" name="source" value="upload" checked><span>上传视频</span></label>
+            <label><input type="radio" name="source" value="webcam"><span>摄像头</span></label>
+            <label><input type="radio" name="source" value="sample"><span>示例片段</span></label>
+          </fieldset>
+          <div class="input-grid">
+            <label class="upload" id="upload-source"><span class="upload-icon" aria-hidden="true">↑</span><span><strong>选择视频</strong><small id="file-name">MP4 · MOV · WebM</small></span><input name="video" type="file" accept="video/*"></label>
+            <label id="sample-source" hidden><span class="visually-hidden">示例片段</span><select name="sample" id="sample"><option value="">选择示例片段</option></select></label>
+            <div class="source-camera subtle" id="camera-source" hidden>摄像头和麦克风</div>
+            <button class="primary" id="start" type="submit" disabled>开始翻译 <span aria-hidden="true">→</span></button>
+          </div>
+          <label class="toggle replay-caption" id="dub-request" hidden><input name="dub" type="checkbox" value="1"> 生成 AI 配音 · 我已取得说话人许可</label>
+          <details class="advanced"><summary>高级设置</summary><div class="advanced-fields">
+            <label>语向<select name="direction" id="direction"><option value="auto">自动识别中文或日语</option><option value="ja2zh">日语 → 中文</option><option value="zh2ja">中文 → 日语</option></select></label>
+            <label>翻译模式<select name="mode"><option value="auto">自动 · 实时引导，离线对比</option><option value="compare">对比</option><option value="guided">引导 · 保留语气</option><option value="perceive">先感知后翻译</option></select></label>
+            <label id="workflow-setting">处理方式<select name="workflow"><option value="live">按原速翻译</option><option value="offline">离线分析 · 四条件</option></select></label>
+            <label id="qwen-asr-setting" class="toggle" hidden><input type="checkbox" name="qwen_recheck" value="1" disabled> 用 Qwen3-ASR 再听一遍</label>
+            <label class="asr-hotwords">识别热词（可选）<input type="text" name="hotwords" maxlength="160" placeholder="用逗号分隔人名、地名或术语" autocomplete="off"></label>
+          </div></details>
+        </form>
+      </div>
+      <div class="workspace">
+        <article class="card player-card"><div class="section-head"><h2>视频</h2><span class="chip" id="status" role="status">等待输入</span></div><div class="player" id="live-player"><video id="live-video" playsinline hidden></video><div class="empty-video" id="live-empty"><span aria-hidden="true">▷</span>暂无视频</div><div id="overlay" class="overlay" hidden></div></div><div class="player-tools"><span class="subtle" id="live-audio" hidden>原声</span><button id="resume-play" class="secondary" type="button" hidden>开始播放</button><label id="live-sound" class="toggle" hidden><input id="live-mute" type="checkbox"> 静音</label><button id="stop-camera" class="secondary" type="button" hidden>结束录制</button><button id="open-result" class="text-link" type="button" hidden>打开回放</button><a id="live-video-download" class="text-link" download hidden>下载原声视频</a></div></article>
+        <article class="card transcript"><div class="section-head"><div><h2>双语字幕</h2><p class="subtle" id="detected-language">自动识别语向</p></div><a id="live-srt" class="text-link" download hidden>下载 SRT ↓</a></div><div id="live-lines" class="live-lines" aria-live="polite"><p class="empty">暂无字幕</p></div></article>
+      </div>
+      <details class="metrics" id="metrics" hidden><summary>会话延迟</summary><div id="metrics-values" class="metrics-grid"></div><a id="metrics-csv" class="text-link" download>下载 CSV ↓</a></details>
+    </section>
+    <section id="replay" hidden>
+      <div class="workspace-heading"><h1>结果回放</h1></div>
+      <div class="replay-bar"><label>会话<select id="run-select"></select></label><label id="replay-condition">字幕条件<select id="download-condition"></select></label><a class="secondary" id="download" download hidden>下载双语 SRT ↓</a></div>
+      <div id="no-replay" class="card empty" hidden>暂无可回放的视频。</div>
+      <div id="replay-content" hidden>
+        <div class="workspace">
+          <article class="card player-card">
+            <div class="section-head"><h2>视频回放</h2><button id="full-video" class="text-link" type="button" hidden>返回完整视频</button></div>
+            <div class="player-tools" id="dub-switch" hidden><label>播放版本<select id="replay-version"><option value="dub">AI 合成配音</option><option value="original">原声</option></select></label><a id="dub-download" class="text-link" download="AI-dub.mp4">下载配音 MP4</a></div>
+            <div class="player"><video id="replay-video" controls playsinline></video></div>
+            <div class="player-tools"><span class="subtle" id="replay-buffer" role="status" hidden></span><button id="retry-replay" class="text-link" type="button" hidden>重新加载</button><a id="replay-video-download" class="text-link" download hidden>下载原声视频</a></div>
+            <label class="toggle replay-caption" id="replay-caption" hidden><input id="captions" type="checkbox" checked> 双语字幕</label>
+            <label class="toggle replay-caption" id="replay-format" hidden><input id="replay-compat" type="checkbox" checked> 兼容播放</label>
+            <p class="subtle" id="replay-meta"></p><a class="text-link" id="attribution" target="_blank" rel="noopener" hidden></a>
+            <form class="player-tools" id="dub-form" hidden><label class="toggle"><input name="consent" type="checkbox" value="1" required> 我已取得说话人配音许可</label><button class="secondary" type="submit">生成配音</button></form>
+            <p class="subtle" id="dub-status" role="status" hidden></p>
+            <progress id="dub-progress" aria-labelledby="dub-status" hidden></progress>
+          </article>
+          <article class="card transcript">
+            <div class="section-head"><h2>双语字幕</h2><button id="switch-pair" class="text-link" type="button" hidden>查看另一版</button></div>
+            <div id="speaker-panel" class="speaker-panel" hidden>
+              <div class="player-tools"><button id="analyze-speakers" class="secondary" type="button">分析人物和语气</button><a id="speaker-download" class="text-link" download="人物与语气.json" hidden>下载人物标注</a></div>
+              <label id="speaker-tone-option" class="toggle"><input id="speaker-tone-model" type="checkbox" checked> 推测语气（需要加载翻译模型）</label>
+              <p id="speaker-status" class="subtle" role="status" hidden></p>
+              <progress id="speaker-progress" aria-labelledby="speaker-status" hidden></progress>
+              <ul id="speaker-summary" class="speaker-summary" hidden></ul>
+            </div>
+            <div id="replay-lines" class="live-lines"></div>
+            <details id="replay-line-details"><summary>逐句详情 <span id="selected-id"></span></summary><div id="selected-line" class="selected-line"></div></details>
+          </article>
+        </div>
+        <details class="metrics" id="replay-metrics" hidden><summary>会话延迟</summary><div id="replay-metrics-values" class="metrics-grid"></div><a id="replay-csv" class="text-link" download>下载 CSV ↓</a></details>
+        <details class="comparisons replay-comparisons"><summary id="table-title">译文对比</summary><label id="changed-filter" class="toggle"><input id="changed-only" type="checkbox"> 只看有差异的句子</label><div class="table-wrap" id="compare-table"></div><p class="subtle" id="comparison-note">高亮表示表述发生变化。问句与文体标签来自规则检查。</p></details>
+      </div>
+    </section>
+    <section id="experiment" hidden>
+      <div class="card comparisons">
+        <div class="section-head"><h2>WMT26 中→日语音评测</h2></div>
+        <p id="experiment-meta" class="subtle"></p>
+        <div class="experiment-filters"><label>画面分组<select id="experiment-stratum"></select></label><label>指标<select id="experiment-metric"></select></label></div>
+        <div class="table-wrap" id="experiment-table"></div>
+      </div>
+      <div class="experiment-figures" id="experiment-figures"></div>
+    </section>
+    <section id="classroom-materials" class="classroom-materials" hidden aria-labelledby="classroom-title">
+      <h2 id="classroom-title">课程材料</h2><ul id="classroom-links"></ul>
+    </section>
+    <footer>结课系统原型 · 演示样本量有限 · 数据集建设未开展</footer>
+  </main>
+</body>
+</html>
