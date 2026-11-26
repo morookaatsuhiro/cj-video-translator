@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import perf_counter
 
@@ -92,6 +93,7 @@ def run_pipeline(
         if controlled_sentence is None
         else None,
         asr_hotwords=hotwords,
+        glossary=settings.glossary,
         transcript_kind="controlled" if controlled_sentence is not None else "asr",
         pair=pair,
         kind="offline",
@@ -144,7 +146,7 @@ def run_pipeline(
         samples = read_wav(run / "media/audio.wav")
         if qwen_recheck and controlled_sentence is None:
             progress("正在用 Qwen3-ASR 复听原声", None, None)
-            manifest["asr"]["qwen_recheck"] = revise_with_qwen(run, lines, direction, settings, hotwords)
+            manifest["asr"]["qwen_recheck"] = revise_with_qwen(run, lines, direction, settings, asr, *samples)
         qwen_status = (manifest["asr"] or {}).get("qwen_recheck", {}).get("status")
         if controlled_sentence is None and hasattr(asr, "recheck") and qwen_status != "complete":
             progress("正在结合前文和热词复核语音识别", None, None)
@@ -161,12 +163,24 @@ def run_pipeline(
             candidates = [
                 (mismatch_run, row, other_manifest["input_sha256"]) for row in read_jsonl(mismatch_run / "lines.jsonl")
             ]
-        for index, line in enumerate(lines, 1):
-            clip = make_clip(run / "media", run, line, info["duration_ms"], settings, audio=samples)
+
+        # Generate all sentence clips concurrently across CPU cores before batched GPU translation.
+        def _build_clip(line_item: dict) -> dict:
+            return make_clip(run / "media", run, line_item, info["duration_ms"], settings, audio=samples)
+
+        if len(lines) > 1:
+            with ThreadPoolExecutor(max_workers=min(4, len(lines))) as pool:
+                built_clips = list(pool.map(_build_clip, lines))
+        else:
+            built_clips = [_build_clip(line) for line in lines]
+
+        for index, (line, clip) in enumerate(zip(lines, built_clips, strict=True), 1):
             line["clip"] = clip
             item = f"{source_hash}:{line['line_id']}"
             outputs, checks = {}, {}
-            for condition_index, condition in enumerate(conditions, 1):
+            batch_jobs = []
+            provenances: dict[str, dict | None] = {}
+            for condition in conditions:
                 mismatch = None
                 provenance = None
                 if condition.endswith("_shuf"):
@@ -177,15 +191,25 @@ def run_pipeline(
                     )
                     mismatch = (other_run, other_line)
                     provenance = {"run_id": other_run.name, "sample_id": other_line["sample_id"], "sha256": other_hash}
-                output, logs = translator.translate_clip(
-                    line,
-                    run,
-                    item_id=item,
-                    direction=direction,
-                    mode=mode,
-                    condition=condition,
-                    mismatch=mismatch,
+                provenances[condition] = provenance
+                from cjvmt.translate import select_media
+
+                batch_jobs.append(
+                    {
+                        "item_id": item,
+                        "direction": direction,
+                        "mode": mode,
+                        "condition": condition,
+                        "source": line["text_asr"] if condition == "T_asr" else line["text_neutral"],
+                        "context": line["context"],
+                        "media": select_media(condition, run, line, mismatch),
+                    }
                 )
+            batch_results = translator.lines_batch(batch_jobs)
+            for condition_index, (condition, (output, logs)) in enumerate(
+                zip(conditions, batch_results, strict=True), 1
+            ):
+                provenance = provenances[condition]
                 outputs[condition] = {**output, "run_id": run.name}
                 checks[condition] = inspect_text(output["text"], direction, output.get("observation"))
                 predictions.extend(
@@ -241,6 +265,29 @@ def run_pipeline(
                     **({"asr_recheck": line["asr_recheck"]} if "asr_recheck" in line else {}),
                 }
             )
+            if len(rows) >= 2 and mode != "compare" and controlled_sentence is None:
+                prev, curr = rows[-2:]
+                for cond in conditions:
+                    if cond.endswith("_shuf"):
+                        continue
+                    a, b = prev["outputs"][cond], curr["outputs"][cond]
+                    joint = translator.refine_boundary(
+                        a,
+                        b,
+                        left_source=prev["text"]["text_asr"],
+                        right_source=curr["text"]["text_asr"],
+                        gap_ms=curr["utterance"]["t_start_abs_ms"] - prev["utterance"]["t_end_abs_ms"],
+                        direction=direction,
+                        condition=cond,
+                        item_id=f"{item}:joint:{cond}",
+                    )
+                    if joint:
+                        predictions.extend(
+                            {**call, "item_id": item, "line_id": line["line_id"], "run_id": run.name} for call in joint
+                        )
+                        for entry in (prev, curr):
+                            output = entry["outputs"][cond]
+                            entry["checks"][cond] = inspect_text(output["text"], direction, output.get("observation"))
             write_jsonl(run / "lines.jsonl", rows)
             write_jsonl(run / "predictions.jsonl", predictions)
         write_jsonl(run / "lines.jsonl", rows)

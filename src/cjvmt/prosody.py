@@ -24,10 +24,14 @@ def transfer_f0(source_f0: np.ndarray, target_f0: np.ndarray, options: dict) -> 
     if min(source_count, target_count) < 2 or min(details.values()) < options["min_voiced_ms"]:
         return target_f0, {"status": "insufficient_voicing", **details}
     window = max(3, round(options["smooth_ms"] / frame_ms) | 1)
-    _, source_trend = pitch_trend(source_f0, window)
+    source_voiced, source_trend = pitch_trend(source_f0, window)
     voiced, target_trend = pitch_trend(target_f0, window)
-    active = (voiced - voiced[0]) / (voiced[-1] - voiced[0])
-    mapped = np.interp(active, np.linspace(0, 1, len(source_trend)), source_trend)
+    # Align voiced progress so a long pause in one language does not shift the phrase ending.
+    mapped = np.interp(
+        np.linspace(0, 1, len(voiced)),
+        np.linspace(0, 1, len(source_voiced)),
+        source_trend[source_voiced - source_voiced[0]],
+    )
     limit = options["max_shift_semitones"]
     shift = np.clip(options["strength"] * (mapped - target_trend[voiced - voiced[0]]), -limit, limit)
     adjusted = target_f0.copy()
@@ -56,17 +60,21 @@ def transfer_intonation(source, source_rate: int, generated, target_rate: int, o
     if not audible.any():
         return generated, {"status": "insufficient_voicing", "source_voiced_ms": 0}
     floor, ceiling = options["min_f0_hz"], options["max_f0_hz"]
-    f0, periodicity = torchcrepe.predict(
-        samples,
-        source_rate,
-        hop_length=hop,
-        fmin=floor,
-        fmax=ceiling,
-        model="tiny",
-        return_periodicity=True,
-        batch_size=256,
-        device="cpu",
-    )
+    crepe_device = "cuda" if torch.cuda.is_available() else "cpu"
+    with torch.no_grad():
+        f0, periodicity = torchcrepe.predict(
+            samples.to(crepe_device),
+            source_rate,
+            hop_length=hop,
+            fmin=floor,
+            fmax=ceiling,
+            model="tiny",
+            return_periodicity=True,
+            batch_size=256,
+            device=crepe_device,
+        )
+    f0 = f0.cpu()
+    periodicity = periodicity.cpu()
     voiced = audible & (periodicity >= options["min_periodicity"]) & torch.isfinite(f0)
     source_f0 = torch.where(voiced, f0, 0).squeeze(0).numpy()
     if np.count_nonzero(source_f0) * frame_ms < options["min_voiced_ms"]:

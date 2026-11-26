@@ -250,19 +250,7 @@ class WhisperASR:
             and options["min_coverage"] <= len(b) / len(a) <= 1 / options["min_coverage"]
             and NUMBER.findall(original_nfkc) == NUMBER.findall(candidate_nfkc)
         ):
-            spans = [match.span() for term in missing_terms for match in re.finditer(re.escape(term), b)]
-            changes = [edit for edit in comparison.get_opcodes() if edit[0] != "equal"]
-            glossary_only = bool(spans) and all(
-                operation == "replace"
-                and old_end - old_start == new_end - new_start
-                and any(start <= new_start < new_end <= end for start, end in spans)
-                for operation, old_start, old_end, new_start, new_end in changes
-            )
-            applied = (
-                similarity >= options["glossary_min_similarity"]
-                and glossary_only
-                and candidate_score >= score - options["hotword_score_drop"]
-            ) or (similarity >= options["min_similarity"] and candidate_score >= score + options["min_gain"])
+            applied = similarity >= options["min_similarity"] and candidate_score >= score + options["min_gain"]
         return {
             "applied": applied,
             "original": original,
@@ -271,6 +259,27 @@ class WhisperASR:
             "candidate_logprob": candidate_score,
             "similarity": round(similarity, 3),
         }
+
+    def score_transcripts(self, samples: np.ndarray, language: str, texts: tuple[str, str]) -> tuple[float, float]:
+        """Compare the two spellings on the same audio without a prompt or glossary."""
+        from faster_whisper.audio import pad_or_trim
+        from faster_whisper.tokenizer import Tokenizer
+
+        engine = self.engine
+        tokenizer = Tokenizer(engine.hf_tokenizer, engine.model.is_multilingual, "transcribe", language)
+        mel = engine.feature_extractor(samples.astype(np.float32) / 32768)
+        frames = min(mel.shape[-1], engine.feature_extractor.nb_max_frames)
+        encoded = engine.encode(pad_or_trim(mel, engine.feature_extractor.nb_max_frames))
+        scores = []
+        for text in texts:
+            tokens = tokenizer.encode(text)
+            result = engine.model.align(encoded, tokenizer.sot_sequence, [tokens], frames)[0]
+            probs = np.asarray(result.text_token_probs, dtype=float)
+            if len(probs) != len(tokens) or not len(probs) or not np.all(np.isfinite(probs)):
+                raise ValueError("Invalid audio alignment scores")
+            # Per-character units avoid rewarding a spelling just for splitting into more tokenizer pieces.
+            scores.append(float(np.log(np.clip(probs, 1e-10, 1)).sum() / len(text)))
+        return scores[0], scores[1]
 
     def _transcribe(
         self,

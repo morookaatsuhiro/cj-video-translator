@@ -4,13 +4,14 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import Event, Lock, Thread
 
 from cjvmt import speakers
-from cjvmt.config import Settings, file_hash
-from cjvmt.dubbing import eligible, enabled, generate_dub
+from cjvmt.config import Settings, file_hash, parse_glossary
+from cjvmt.dubbing import can_keep_resident, eligible, enabled, generate_dub
 from cjvmt.media import browser_replay
 from cjvmt.pairs import REVIEW_CHOICES, REVIEW_PENDING
 from cjvmt.pipeline import run_pipeline, subtitle_name
@@ -56,6 +57,111 @@ COMMONS = {
         "Spoken_Wikinews_-_Japanese_001_170103_Hakone_Ekiden.webm",
     ),
 }
+
+
+def dir_size_bytes(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file() and not item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def is_protected_run(run: Path, manifest: dict | None = None) -> bool:
+    kind = (manifest or {}).get("kind") or ""
+    return kind.startswith("wmt") or "_wmt25-" in run.name or "_wmt26-" in run.name
+
+
+def _redundant_paths(run: Path, manifest: dict | None = None) -> list[Path]:
+    paths: list[Path] = []
+    if (run / "media/source.mp4").is_file() and (run / "input").is_dir():
+        paths.append(run / "input")
+    if (run / "media/dub.mp4").is_file() and (run / "media/dub.wav").is_file():
+        paths.append(run / "media/dub.wav")
+    for name in ("media/dub.webm", "media/source.webm"):
+        if (run / name).is_file():
+            paths.append(run / name)
+    if (manifest or {}).get("kind") == "realtime" and (manifest or {}).get("status") == "complete":
+        if (run / "media/silent.mp4").is_file():
+            paths.append(run / "media/silent.mp4")
+    paths.extend(run.glob("*.capture"))
+    return paths
+
+
+def slim_run(run: Path, manifest: dict | None = None) -> int:
+    """Remove redundant intermediate files while keeping all playable/analyzable outputs intact."""
+    if is_protected_run(run, manifest):
+        return 0
+    freed = 0
+    for target in _redundant_paths(run, manifest):
+        if target.is_dir():
+            freed += dir_size_bytes(target)
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.is_file():
+            try:
+                freed += target.stat().st_size
+                target.unlink(missing_ok=True)
+            except OSError:
+                continue
+    return freed
+
+
+def _is_reclaimable_run(run: Path, manifest: dict | None) -> bool:
+    if is_protected_run(run, manifest):
+        return False
+    if manifest is None:
+        return True
+    if manifest.get("status") != "complete":
+        return True
+    return (
+        manifest.get("kind") in {"offline", "realtime"}
+        and manifest.get("line_count", 0) == 0
+        and not (run / "media/dub.mp4").is_file()
+    )
+
+
+def storage_summary(folder: Path, active_ids: set[str] | None = None) -> dict:
+    busy = active_ids or set()
+    runs_count = 0
+    total_bytes = 0
+    reclaimable_runs = 0
+    reclaimable_bytes = 0
+    paths = [folder] if (folder / "manifest.json").is_file() else (folder.iterdir() if folder.is_dir() else [])
+    for path in paths:
+        if not path.is_dir():
+            continue
+        manifest_file = path / "manifest.json"
+        manifest = None
+        if manifest_file.is_file():
+            try:
+                manifest = read_json(manifest_file)
+            except (OSError, ValueError):
+                manifest = None
+        if is_protected_run(path, manifest):
+            continue
+        size = dir_size_bytes(path)
+        total_bytes += size
+        if path.name in busy:
+            runs_count += 1
+            continue
+        if _is_reclaimable_run(path, manifest):
+            reclaimable_runs += 1
+            reclaimable_bytes += size
+        elif manifest and manifest.get("kind") in {"offline", "realtime"}:
+            runs_count += 1
+            for extra in _redundant_paths(path, manifest):
+                reclaimable_bytes += dir_size_bytes(extra) if extra.is_dir() else extra.stat().st_size
+    return {
+        "runs_count": runs_count,
+        "total_bytes": total_bytes,
+        "reclaimable_runs": reclaimable_runs,
+        "reclaimable_bytes": reclaimable_bytes,
+    }
 
 
 def speaker_data(run: Path) -> dict | None:
@@ -113,6 +219,10 @@ def run_data(run: Path, manifest: dict, base: str) -> dict:
         "kind": manifest["kind"],
         "direction": manifest["direction"],
         "name": credits[0] if credits else manifest["input_name"],
+        "custom_title": manifest.get("custom_title"),
+        "started_at": manifest.get("started_at"),
+        "size_bytes": dir_size_bytes(run),
+        "deletable": base.startswith("/files/") and not is_protected_run(run, manifest),
         "attribution": {"text": credits[2], "url": "https://commons.wikimedia.org/wiki/File:" + credits[3]}
         if credits
         else None,
@@ -124,6 +234,7 @@ def run_data(run: Path, manifest: dict, base: str) -> dict:
         "replay_quality": (manifest.get("media") or {}).get("replay"),
         "source_license": manifest.get("source_license"),
         "transcript_kind": manifest.get("transcript_kind"),
+        "glossary": manifest.get("glossary", []),
         "asr_qwen": (manifest.get("asr") or {}).get("qwen_recheck"),
         "pair": pair,
         "summary": manifest.get("summary"),
@@ -234,6 +345,7 @@ def export_site(settings: Settings, selected: Path | None = None) -> Path:
             kind.startswith("wmt")
             or kind == "webcam"
             or manifest.get("asr_hotwords")
+            or manifest.get("glossary")
             or manifest.get("pair")
             or not (run / "media/source.mp4").is_file()
         ):
@@ -278,7 +390,7 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
     from cjvmt.asr import make_asr, parse_hotwords
     from cjvmt.backends import make_backend
     from cjvmt.qwen_asr import available as qwen_asr_available
-    from cjvmt.realtime import file_sim, run_session
+    from cjvmt.realtime import fast_file_run, file_sim, run_session
     from cjvmt.realtime.webcam import WebcamInput
 
     app = FastAPI(title="CJ-VMT", docs_url=None, redoc_url=None, openapi_url=None)
@@ -312,7 +424,8 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
             write_json(path, state)
 
         def release_translation() -> None:
-            if hasattr(engine, "close"):
+            # Keep Qwen3-Omni warm in VRAM on >= 36 GB GPUs (e.g., RTX 3090 48 GB) so subsequent runs skip 100s reload.
+            if not can_keep_resident(settings) and hasattr(engine, "close"):
                 engine.close()
 
         dubbing_runs.add(run.name)
@@ -322,11 +435,12 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
                 raise ValueError("此会话没有可配音的自录或授权素材。")
             engine = engine or make_backend(settings, backend_name)
             recognizer = recognizer or make_asr(settings, backend_name)
+            dub_settings = replace(settings, glossary=tuple(manifest.get("glossary", ())))
             result = generate_dub(
                 run,
                 manifest,
-                settings,
-                Translator(settings, engine),
+                dub_settings,
+                Translator(dub_settings, engine),
                 release_translation,
                 update,
                 asr=recognizer,
@@ -349,13 +463,13 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
     async def start_dub(run_id: str, request: Request):
         run = find_run(run_id)
         manifest = read_json(run / "manifest.json")
-        form = await request.form(max_files=0, max_fields=1)
+        form = await request.form(max_files=0, max_fields=2)
         if form.get("consent") != "1" or not eligible(run, manifest):
             raise HTTPException(400, "请选择自录或已获配音许可的视频，并确认说话人同意。")
         if not enabled(settings) or backend_name == "mock":
             raise HTTPException(503, "本地配音模型尚未就绪。")
         state = dub_data(run, f"/files/{run_id}")
-        if state and state["status"] == "complete":
+        if state and state["status"] == "complete" and form.get("force") != "1":
             return state
         if not inference.acquire(blocking=False):
             raise HTTPException(409, "正在处理另一项任务，请等当前任务结束。")
@@ -441,11 +555,92 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
             raise HTTPException(404)
         return FileResponse(path)
 
+    def active_run_ids() -> set[str]:
+        with guard:
+            busy = {job_id for job_id, state in jobs.items() if not state["finished"]}
+        return busy | dubbing_runs | speaker_runs
+
     @app.get("/api/runs")
     def runs():
         return [
             run_data(run, manifest, f"/files/{run.name}") for run, manifest in run_list(folder, include_dubbable=True)
         ]
+
+    @app.get("/api/storage")
+    def storage():
+        return storage_summary(folder, active_run_ids())
+
+    @app.patch("/api/runs/{run_id}")
+    async def rename_run(run_id: str, request: Request):
+        run = find_run(run_id)
+        manifest_path = run / "manifest.json"
+        manifest = read_json(manifest_path)
+        if is_protected_run(run, manifest):
+            raise HTTPException(400, "对照实验评测记录不允许修改。")
+        try:
+            body = await request.json()
+        except ValueError as error:
+            raise HTTPException(400, "请求格式无效。") from error
+        raw_title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(raw_title, str):
+            raise HTTPException(400, "请提供字符串类型的标题。")
+        title = " ".join(raw_title.split())[:60]
+        if title:
+            manifest["custom_title"] = title
+        else:
+            manifest.pop("custom_title", None)
+        write_json(manifest_path, manifest)
+        return run_data(run, manifest, f"/files/{run.name}")
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: str):
+        run = find_run(run_id)
+        if run_id in active_run_ids():
+            raise HTTPException(409, "该会话正在处理中，暂无法删除。")
+        manifest = read_json(run / "manifest.json")
+        if is_protected_run(run, manifest):
+            raise HTTPException(400, "对照实验评测记录受保护，不能删除。")
+        freed = dir_size_bytes(run)
+        shutil.rmtree(run)
+        with guard:
+            jobs.pop(run_id, None)
+        return {"deleted": run_id, "freed_bytes": freed, "storage": storage_summary(folder, active_run_ids())}
+
+    @app.post("/api/runs/cleanup")
+    def cleanup_runs():
+        busy = active_run_ids()
+        removed: list[str] = []
+        slimmed = 0
+        freed = 0
+        target_root = folder if not (folder / "manifest.json").is_file() else folder.parent
+        if target_root.is_dir():
+            for path in list(target_root.iterdir()):
+                if not path.is_dir() or path.name in busy:
+                    continue
+                manifest_file = path / "manifest.json"
+                manifest = None
+                if manifest_file.is_file():
+                    try:
+                        manifest = read_json(manifest_file)
+                    except (OSError, ValueError):
+                        manifest = None
+                if is_protected_run(path, manifest):
+                    continue
+                if _is_reclaimable_run(path, manifest):
+                    freed += dir_size_bytes(path)
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed.append(path.name)
+                elif manifest and manifest.get("kind") in {"offline", "realtime"}:
+                    saved = slim_run(path, manifest)
+                    if saved > 0:
+                        freed += saved
+                        slimmed += 1
+        return {
+            "removed_runs": removed,
+            "slimmed_runs": slimmed,
+            "freed_bytes": freed,
+            "storage": storage_summary(folder, active_run_ids()),
+        }
 
     @app.get("/api/options")
     def options():
@@ -456,6 +651,7 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
         return {
             "backend": backend_name,
             "dubbing": enabled(settings) and backend_name != "mock",
+            "videoGlossary": True,
             "qwenAsr": backend_name != "mock" and qwen_asr_available(),
             "speakerAnalysis": backend_name != "mock" and speakers.available(settings),
             "samples": samples,
@@ -481,20 +677,22 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
     async def start(request: Request):
         if panel == "replay":
             raise HTTPException(404)
-        schema = await request.form(max_files=1, max_fields=7)
+        schema = await request.form(max_files=1, max_fields=10)
         direction, mode, workflow = (schema.get(key) for key in ("direction", "mode", "workflow"))
         if mode == "auto":
-            mode = "compare" if workflow == "offline" else "guided"
+            mode = {"offline": "compare", "fast": "perceive"}.get(workflow, "guided")
         with_dub = schema.get("dub") == "1"
         qwen_recheck = schema.get("qwen_recheck") == "1"
         try:
+            glossary = parse_glossary(schema.get("glossary", ""))
+            job_settings = replace(settings, glossary=glossary)
             hotwords = parse_hotwords(schema.get("hotwords", ""), settings)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
         if (
             (direction != "auto" and direction not in settings.values["asr"]["lang"])
             or mode not in settings.values["prompt_modes"]["available"]
-            or workflow not in {"live", "offline", "webcam"}
+            or workflow not in {"fast", "live", "offline", "webcam"}
         ):
             raise HTTPException(400, "翻译方向、模式或处理方式无效。")
         if qwen_recheck and workflow != "offline":
@@ -506,7 +704,6 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
                 raise HTTPException(503, "本地配音模型尚未就绪。")
             if workflow != "webcam" and not getattr(schema.get("video"), "filename", None):
                 raise HTTPException(400, "配音仅支持自录或已获许可的视频。")
-            mode = "perceive"
         if (
             workflow == "webcam"
             and request.url.scheme != "https"
@@ -574,7 +771,7 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
 
                 if camera:
                     result = run_session(
-                        settings,
+                        job_settings,
                         direction,
                         mode,
                         backend_name,
@@ -587,9 +784,24 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
                         wait_for_player=wait_for_player,
                         hotwords=hotwords,
                     )
+                elif workflow == "fast":
+                    result = fast_file_run(
+                        job_settings,
+                        source,
+                        direction,
+                        mode,
+                        backend_name,
+                        emit,
+                        run=run,
+                        engine=engine,
+                        asr=recognizer,
+                        hotwords=hotwords,
+                        source_kind="uploaded" if upload else ("synthetic" if backend_name == "mock" else "commons"),
+                        for_dub=with_dub,
+                    )
                 elif workflow == "live":
                     result = file_sim(
-                        settings,
+                        job_settings,
                         source,
                         direction,
                         mode,
@@ -604,7 +816,7 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
                     )
                 else:
                     result = run_pipeline(
-                        settings,
+                        job_settings,
                         source,
                         direction,
                         backend_name,
@@ -622,6 +834,7 @@ def create_app(settings: Settings, *, results: Path | None = None, panel: str = 
                     )
                     export_comparison(result)
                     emit({"type": "done", "run_id": result.name})
+                slim_run(result, read_json(result / "manifest.json"))
                 if with_dub:
                     emit({"type": "dub", "run_id": result.name})
                     make_dub(result, read_json(result / "manifest.json"))

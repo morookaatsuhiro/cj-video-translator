@@ -113,3 +113,26 @@ class LocalOmni:
                 self.close()
             raise RuntimeError(result["error"])
         return result
+
+    def generate_batch(self, requests: list[Request], batch_size: int = 4) -> list[dict]:
+        if not requests:
+            return []
+        if len(requests) == 1:
+            return [self.generate(requests[0])]
+        self.warm()
+        outputs: list[dict] = []
+        for offset in range(0, len(requests), max(1, batch_size)):
+            chunk = requests[offset : offset + max(1, batch_size)]
+            if len(chunk) == 1:
+                outputs.append(self.generate(chunk[0]))
+                continue
+            payload = {"batch": [asdict(req) for req in chunk]}
+            self.process.stdin.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+            self.process.stdin.flush()
+            result = self._read(max(180, 90 * len(chunk)))
+            if "error" in result:
+                if "EngineDeadError" in result["error"]:
+                    self.close()
+                raise RuntimeError(result["error"])
+            outputs.extend(result["batch"])
+        return outputs

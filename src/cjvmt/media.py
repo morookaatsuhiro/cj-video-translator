@@ -53,6 +53,39 @@ def ffmpeg(settings: Settings, args: list[str]) -> None:
     )
 
 
+def has_visual_detail(settings: Settings, video: Path | None, frames: tuple[Path, ...], fps: float) -> bool:
+    """A near-uniform sampled image cannot support an object observation."""
+    import numpy as np
+
+    def detailed(raw: bytes) -> bool:
+        pixels = np.frombuffer(raw, np.uint8).reshape(-1, 32 * 48, 3)
+        return bool(len(pixels) and (np.ptp(pixels, axis=1) >= 8).any())
+
+    if frames:
+        try:
+            from PIL import Image
+        except ImportError:
+            pass
+        else:
+            for frame in dict.fromkeys(frames):
+                with Image.open(frame) as img:
+                    if detailed(img.convert("RGB").resize((48, 32)).tobytes()):
+                        return True
+            return False
+    for path in (video,) if video else dict.fromkeys(frames):
+        decode = ["-v", "error", "-i", str(path), "-an"]
+        output = ["-pix_fmt", "rgb24", "-threads", "1", "-f", "rawvideo", "pipe:1"]
+        timeout = settings.values["clip"]["decode_timeout_s"]
+        filters = f"fps={fps:g},scale=48:32" if video else "scale=48:32"
+        raw = media_command("ffmpeg", [*decode, "-vf", filters, *output], timeout)
+        if video and not raw:
+            # The translation worker likewise uses the first frame for a clip shorter than its sampling interval.
+            raw = media_command("ffmpeg", [*decode, "-frames:v", "1", "-vf", "scale=48:32", *output], timeout)
+        if detailed(raw):
+            return True
+    return False
+
+
 def scale_filter(side: int) -> str:
     return f"scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
 
@@ -112,8 +145,42 @@ def prepare(path: Path, dest: Path, settings: Settings, *, max_seconds: float | 
     dest.mkdir(parents=True, exist_ok=True)
     clip = settings.values["clip"]
     base = ["-i", str(path)]
-    ffmpeg(settings, [*base, "-map", "0:a:0", "-ac", "1", "-ar", str(clip["audio_sr"]), str(dest / "audio.wav")])
     shape = ["-vf", scale_filter(clip["long_side_px"]), *video_encode()]
-    ffmpeg(settings, [*base, "-map", "0:v:0", "-an", *shape, str(dest / "silent.mp4")])
-    ffmpeg(settings, [*base, "-map", "0:v:0", "-map", "0:a:0", *shape, "-c:a", "aac", str(dest / "source.mp4")])
+    # Single-pass H.264 encode + audio extraction, then instant zero-reencode stream copy for silent.mp4.
+    ffmpeg(
+        settings,
+        [
+            *base,
+            "-map",
+            "0:a:0",
+            "-ac",
+            "1",
+            "-ar",
+            str(clip["audio_sr"]),
+            str(dest / "audio.wav"),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            *shape,
+            "-c:a",
+            "aac",
+            str(dest / "source.mp4"),
+        ],
+    )
+    ffmpeg(
+        settings,
+        [
+            "-i",
+            str(dest / "source.mp4"),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(dest / "silent.mp4"),
+        ],
+    )
     return {**info, "sha256": file_hash(path), "name": path.name}

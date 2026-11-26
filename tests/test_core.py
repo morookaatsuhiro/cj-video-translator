@@ -86,6 +86,24 @@ def test_segment_boundaries_and_context():
     assert lines[-1]["asr_warning"]
 
 
+def test_segment_prefers_comma_or_pause_instead_of_chopping_words():
+    settings = Settings.load()
+    # 34 Chinese chars without final punctuation, with a comma after char 14 and a breath pause before "现在"
+    tokens = [
+        (0, 800, "大家好"),
+        (810, 1200, "，"),
+        (1220, 2600, "这是我的中日多模态视频翻译系统展示"),
+        (2850, 3600, "加上声音和画面"),
+        (3620, 4200, "以后"),
+        (4250, 5000, "翻译是不是更自然"),
+    ]
+    groups = [{"words": [{"start_ms": a, "end_ms": b, "text": text} for a, b, text in tokens]}]
+    lines = split_sentences(groups, "zh2ja", settings, 6000)
+    assert len(lines) >= 2
+    # Must NOT split inside "以后" — should break cleanly at the comma or the 250ms pause!
+    assert all(not line["text_asr"].endswith("以") and not line["text_asr"].startswith("后") for line in lines)
+
+
 def test_gate_and_stats():
     gated, (start, end) = gate_audio(np.full(300, 1000), 1000, 0, 400, (100, 200), 10)
     assert len(gated) == 400 and (start, end) == (100, 200)

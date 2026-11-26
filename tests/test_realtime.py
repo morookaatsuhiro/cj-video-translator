@@ -92,6 +92,113 @@ def test_server_configuration_and_media_allowlist(tmp_path):
         form = {"direction": "zh2ja", "workflow": "offline", "mode": "auto", "qwen_recheck": "1"}
         assert client.post("/api/jobs", data=form).status_code == 503
         assert client.post("/api/jobs", data={**form, "workflow": "live"}).status_code == 400
+        assert client.get("/api/storage").json()["runs_count"] == 0
+
+
+def test_run_rename_delete_and_cleanup_api(tmp_path):
+    from cjvmt.store import write_json, write_jsonl
+
+    settings = replace(Settings.load(), root=tmp_path)
+    results = settings.path("results")
+    # 1. Valid completed run with redundant input + dub.wav
+    good = results / "20261127-0100_job_aaaa1111"
+    (good / "media").mkdir(parents=True)
+    (good / "input").mkdir()
+    (good / "input/raw.mp4").write_bytes(b"x" * 4096)
+    (good / "media/source.mp4").write_bytes(b"v" * 1024)
+    (good / "media/dub.mp4").write_bytes(b"d" * 1024)
+    (good / "media/dub.wav").write_bytes(b"w" * 2048)
+    (good / "media/silent.mp4").write_bytes(b"s" * 1024)
+    write_jsonl(
+        good / "session/session.jsonl",
+        [{"line_id": "L001", "start_ms": 0, "end_ms": 1000, "text_asr": "hi", "quick": "你好", "multimodal": "你好"}],
+    )
+    write_json(
+        good / "manifest.json",
+        {
+            "run_id": good.name,
+            "started_at": "2026-11-27T01:00:00Z",
+            "status": "complete",
+            "kind": "realtime",
+            "direction": "zh2ja",
+            "input_name": "a5c4837b8b5f7f54d9053270b7e65bbe.mp4",
+            "prompt_mode": "perceive",
+            "conditions": ["final"],
+            "line_count": 1,
+            "model": {"backend": "mock", "model": "mock"},
+        },
+    )
+    # 2. Failed run & protected WMT eval run
+    failed = results / "20261127-0105_job_bbbb2222"
+    write_json(failed / "manifest.json", {"run_id": failed.name, "status": "failed", "kind": "realtime"})
+    wmt = results / "20261125-0247_wmt26-eval_bb2b92a1"
+    write_json(wmt / "manifest.json", {"run_id": wmt.name, "status": "complete", "kind": "wmt_eval"})
+
+    with TestClient(create_app(settings, panel="live")) as client:
+        st = client.get("/api/storage").json()
+        assert st["runs_count"] == 1 and st["reclaimable_runs"] == 1 and st["reclaimable_bytes"] >= 7168
+
+        # Rename run
+        renamed = client.patch(f"/api/runs/{good.name}", json={"title": "结课演示自录版"})
+        assert renamed.status_code == 200
+        assert renamed.json()["custom_title"] == "结课演示自录版"
+
+        # Cleanup removes failed run & slims redundant files from good run, leaving WMT untouched
+        cleaned = client.post("/api/runs/cleanup").json()
+        assert failed.name in cleaned["removed_runs"]
+        assert cleaned["slimmed_runs"] == 1
+        assert not failed.exists()
+        assert (
+            not (good / "input").exists()
+            and not (good / "media/dub.wav").exists()
+            and not (good / "media/silent.mp4").exists()
+        )
+        assert (good / "media/source.mp4").is_file() and (good / "media/dub.mp4").is_file()
+        assert wmt.exists()
+
+        # Protected WMT run cannot be deleted
+        assert client.delete(f"/api/runs/{wmt.name}").status_code == 400
+
+        # Delete good run
+        deleted = client.delete(f"/api/runs/{good.name}")
+        assert deleted.status_code == 200 and not good.exists()
+        assert client.get("/api/runs").json() == []
+
+
+def test_fast_file_run_skips_playback_sleep_and_marks_dub_ready(tmp_path):
+    from cjvmt.media import ffmpeg
+    from cjvmt.realtime import fast_file_run
+    from cjvmt.store import read_json, read_jsonl
+
+    settings = replace(Settings.load(), root=tmp_path)
+    video = tmp_path / "clip.mp4"
+    ffmpeg(
+        settings,
+        ["-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:d=3", "-f", "lavfi", "-i", "sine=f=440:d=3", str(video)],
+    )
+    events = []
+    out = fast_file_run(
+        settings,
+        video,
+        "ja2zh",
+        "perceive",
+        "mock",
+        events.append,
+        for_dub=True,
+    )
+    manifest = read_json(out / "manifest.json")
+    assert manifest["status"] == "complete"
+    assert manifest["segmented_for_dub"] is True
+    rows = read_jsonl(out / "session/session.jsonl")
+    assert len(rows) >= 1 and rows[0]["multimodal"] and rows[0]["observation"] is not None
+    assert any(event["type"] == "done" for event in events)
+    subtitles_only = fast_file_run(settings, video, "ja2zh", "perceive", "mock", lambda _: None, for_dub=False)
+    assert (out / "session/subtitles.srt").read_bytes() == (subtitles_only / "session/subtitles.srt").read_bytes()
+
+    def hashes(run):
+        return [row["prompt_sha256"] for row in read_jsonl(run / "predictions.jsonl")]
+
+    assert hashes(out) == hashes(subtitles_only)
 
 
 @pytest.mark.parametrize("direction", ["zh2ja", "auto"])
@@ -174,3 +281,34 @@ def test_camera_stream_preserves_frame_timing_and_exports_replay(tmp_path, direc
         "sentence",
         "done",
     ]
+
+
+def test_uploaded_glossary_stays_with_its_video(tmp_path):
+    from time import sleep
+
+    from cjvmt.media import ffmpeg
+    from cjvmt.store import read_json
+
+    settings = replace(Settings.load(), root=tmp_path)
+    video = tmp_path / "source.mp4"
+    ffmpeg(settings, ["-f", "lavfi", "-i", "testsrc2=s=128x96:r=8:d=1", "-f", "lavfi", "-i", "sine=d=1", str(video)])
+    fields = {"workflow": "fast", "direction": "zh2ja", "mode": "auto"}
+    with TestClient(create_app(settings, panel="live")) as client:
+        bad = client.post("/api/jobs", data={**fields, "glossary": "wrong format"})
+        assert bad.status_code == 400
+        for raw, expected in [("唐河县 | 唐河県", ["唐河県"]), ("", [])]:
+            response = client.post(
+                "/api/jobs",
+                data={**fields, "glossary": raw},
+                files={"video": ("source.mp4", video.read_bytes(), "video/mp4")},
+            )
+            assert response.status_code == 200, response.text
+            job = response.json()["job"]
+            for _ in range(150):
+                if client.get(f"/api/jobs/{job}").json()["finished"]:
+                    break
+                sleep(0.05)
+            manifest = read_json(settings.path("results") / job / "manifest.json")
+            assert manifest["status"] == "complete" and manifest["prompt_mode"] == "perceive"
+            assert [t["target"] for t in manifest["glossary"]] == expected
+            assert not manifest.get("asr_hotwords")

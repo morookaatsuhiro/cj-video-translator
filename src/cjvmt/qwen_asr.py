@@ -8,7 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
 
-from cjvmt.asr import NUMBER, comparable_text, trusted_context
+import numpy as np
+
+from cjvmt.asr import NUMBER, WhisperASR, comparable_text
 from cjvmt.config import Settings
 from cjvmt.segment import neutralize
 from cjvmt.store import read_json, write_json
@@ -26,18 +28,18 @@ def available() -> bool:
     return python.is_file() and all((model / name).is_file() for name in ("model.safetensors", "tokenizer.json"))
 
 
-def revise(run: Path, lines: list[dict], direction: str, settings: Settings, hotwords: tuple[str, ...]) -> dict:
+def revise(
+    run: Path, lines: list[dict], direction: str, settings: Settings, asr: WhisperASR, samples: np.ndarray, rate: int
+) -> dict:
     python, snapshot = runtime()
     receipt = snapshot / "revision.txt"
     identity = {"model": MODEL, "revision": receipt.read_text().strip() if receipt.is_file() else snapshot.name}
     recheck = settings.values["asr"]["recheck"]
-    requests = []
-    for index, line in enumerate(lines):
-        start, end = line["t_start_abs_ms"], line["t_end_abs_ms"]
-        history = trusted_context(lines[:index], start, "t_end_abs_ms", settings)
-        prompt = (" ".join(history)[-recheck["prompt_chars"] :] + " " + "、".join(hotwords)).strip()
-        requests.append({"start_ms": start, "end_ms": end, "prompt": prompt or None})
-
+    requests = [{"start_ms": line["t_start_abs_ms"], "end_ms": line["t_end_abs_ms"], "prompt": None} for line in lines]
+    counts = {"selected": len(lines), "total": len(lines)}
+    if not requests:
+        return {**identity, **counts, "status": "complete", "applied": 0, "elapsed_ms": 0}
+    language = settings.values["asr"]["lang"][direction]
     started = perf_counter()
     try:
         with TemporaryDirectory(prefix=".qwen-asr-", dir=run) as directory:
@@ -47,7 +49,7 @@ def revise(run: Path, lines: list[dict], direction: str, settings: Settings, hot
                 request,
                 {
                     "audio": str(run / "media/audio.wav"),
-                    "language": settings.values["asr"]["lang"][direction],
+                    "language": language,
                     "lines": requests,
                 },
             )
@@ -60,7 +62,7 @@ def revise(run: Path, lines: list[dict], direction: str, settings: Settings, hot
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     env=env,
-                    timeout=120,
+                    timeout=120 + sum(row["end_ms"] - row["start_ms"] for row in requests) / 1000,
                     check=True,
                 )
             candidates = read_json(output)
@@ -71,44 +73,68 @@ def revise(run: Path, lines: list[dict], direction: str, settings: Settings, hot
             ):
                 raise ValueError("Invalid Qwen ASR response")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return {**identity, "status": "fallback"}
+        return {**identity, **counts, "applied": 0, "status": "fallback"}
 
     applied = 0
     context = settings.values["context"]
-    for index, (line, candidate) in enumerate(zip(lines, candidates, strict=True)):
-        original = line["text_asr"]
-        first, second = map(comparable_text, (original, candidate))
-        similarity = SequenceMatcher(None, first, second, autojunk=False).ratio()
-        old_numbers, new_numbers = (
-            NUMBER.findall(unicodedata.normalize("NFKC", text)) for text in (original, candidate)
-        )
-        use_candidate = (
-            first != second
-            and similarity >= recheck["glossary_min_similarity"]
-            and recheck["min_coverage"] * len(first) <= len(second) <= len(first) / recheck["min_coverage"]
-            and old_numbers == new_numbers
-        )
-        line["asr_recheck"] = {
-            "model": MODEL,
-            "original": original,
-            "candidate": candidate,
-            "similarity": round(similarity, 3),
-            "applied": use_candidate,
-        }
+    for index, line in enumerate(lines):
         previous = lines[max(0, index - context["prev_turns"]) : index]
         line["context"] = [
             row["text_neutral"]
             for row in previous
             if line["t_start_abs_ms"] - row["t_end_abs_ms"] <= context["prev_window_ms"]
         ]
-        if use_candidate:
-            line["text_asr"] = candidate
-            line["text_neutral"] = neutralize(candidate, settings)
+        candidate = candidates[index]
+        original = line["text_asr"]
+        first, second = map(comparable_text, (original, candidate))
+        similarity = SequenceMatcher(None, first, second, autojunk=False).ratio()
+        numbers = [NUMBER.findall(unicodedata.normalize("NFKC", t)) for t in (original, candidate)]
+        adopted, scores = original, None
+        if first == second:
+            reason = "两遍识别一致"
+        elif numbers[0] != numbers[1]:
+            reason = "数值存在分歧"
+        elif (
+            not first
+            or not second
+            or similarity < recheck["min_similarity"]
+            or not recheck["min_coverage"] <= len(second) / len(first) <= 1 / recheck["min_coverage"]
+        ):
+            reason = "两遍转写差异过大"
+        else:
+            start, end = round(rate * line["t_start_abs_ms"] / 1000), round(rate * line["t_end_abs_ms"] / 1000)
+            try:
+                if rate != 16000 or end <= start:
+                    raise ValueError("Expected non-empty 16 kHz audio")
+                scores = asr.score_transcripts(samples[start:end], language, (first, second))
+            except (RuntimeError, ValueError, OSError):
+                reason = "原声评分不可用"
+            else:
+                if scores[1] >= scores[0] + recheck["min_gain"]:
+                    adopted = candidate
+                    reason = "原声评分支持复听候选"
+                else:
+                    reason = "原声评分不足以支持改写"
+        if "asr_recheck" in line:
+            line["whisper_recheck"] = line["asr_recheck"]
+        line["asr_recheck"] = {
+            "reasons": [reason],
+            **({"audio_logprob_per_char": list(scores)} if scores else {}),
+            "model": MODEL,
+            "original": original,
+            "candidate": candidate,
+            "similarity": round(similarity, 3),
+            "adopted_text": adopted,
+            "applied": adopted != original,
+        }
+        if adopted != original:
+            line["text_asr"] = adopted
+            line["text_neutral"] = neutralize(adopted, settings)
             applied += 1
     return {
         **identity,
         "status": "complete",
         "applied": applied,
-        "total": len(lines),
+        **counts,
         "elapsed_ms": round((perf_counter() - started) * 1000, 3),
     }

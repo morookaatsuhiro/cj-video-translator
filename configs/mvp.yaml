@@ -35,14 +35,13 @@ asr:
     trusted_logprob: -0.55
     min_gain: 0.12
     min_similarity: 0.84
-    glossary_min_similarity: 0.75
     min_coverage: 0.90
-    hotword_score_drop: 0.08
     beam_size: 3
     prompt_chars: 120
     max_hotwords_chars: 160
 
 segment:
+  joint_max_gap_ms: 650
   pause_ms: 600                # 停顿不短于这个值就切句
   max_chars: {ja: 40, zh: 30}
   max_dur_ms: 10000
@@ -104,6 +103,8 @@ prompt_modes:                  # 见 AGENTS.md §7.6；比较只能在同一模�
   default: compare
   available: [compare, guided, perceive]
   guided_applies_to: [T+A, T+V, T+V+A]   # “只看文字”加提醒没有意义
+  object_grounding: true
+  object_observation_max_tokens: 160
   perceive_max_new_tokens: 96
 
 conditions:
@@ -142,8 +143,16 @@ tts:                           # 语音层：带语气的译文语音（可选�
   backend: cosyvoice2          # 以官方仓库为准；装在单独的 Python 3.10 环境里，作为独立进程调用
   model: CosyVoice2-0.5B
   mode: instruct_clone         # 原句声音作音色参考 + 语气指令
-  ref_audio_min_sec: 3.0       # 原句太短时改用同一说话人更长的一段，或固定参考音色
+  ref_audio_max_sec: 12.0
+  ref_audio_pad_floor_sec: 0.5
+  ref_audio_min_sec: 3.0       # 短句优先选同视频同人长句；无法确认分组时只用本句
   max_speedup: 1.3             # 配音比原句长时最多加速到这个倍数
+  min_speed: 0.78              # 配音比原句短时允许放慢到的最低倍率（自然不失真）
+  tts_speed_range: [0.80, 1.20] # CosyVoice2 原生生成语速范围
+  fade_ms: 18                  # 句首句尾淡入淡出，消除咔哒切换感
+  background_duck_db: -65.0    # 关闭跨语种原声人声透传，避免日语配音中听出底层的中文说话声
+  trim_silence_db: -42.0       # 裁去 TTS 首尾多余空白的电平阈值
+  keep_resident: true          # 显存 >= 36 GB 时让 CosyVoice2 与 Qwen3-Omni 同时常驻，避免反复冷加载
   sample_rate: 24000
   timeout_sec: 600
   realtime_play: after_subtitle

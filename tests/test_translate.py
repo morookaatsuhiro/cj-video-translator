@@ -211,3 +211,142 @@ def test_translation_cli_stages(tmp_path, monkeypatch):
     )
     assert progress[0][0] == "正在读取视频和音轨" and progress[-1][0] == "正在导出字幕和回放"
     assert [(done, total) for _, done, total in progress if total is not None] == [(i, 8) for i in range(9)]
+
+
+@pytest.mark.parametrize("media_type", ["frames", "video", "audio", "text"])
+def test_visual_grounding_is_scoped_to_visible_media(tmp_path, media_type):
+    class Observer(Mock):
+        def generate(self, request):
+            result = super().generate(request)
+            if request.task == "observe" and "5." in request.user:
+                result["text"] += "\n5. 碗边是一双筷子"
+            return result
+
+    settings = replace(Settings.load(), root=tmp_path)
+    backend = Observer()
+    translator = Translator(settings, backend)
+    path = tmp_path / "frame.ppm"
+    path.write_bytes(b"P6\n48 32\n255\n" + (bytes([80, 10, 50]) * 24 + bytes([20, 90, 230]) * 24) * 32)
+    if media_type == "video":
+        video = tmp_path / "scene.mp4"
+        ffmpeg(settings, ["-loop", "1", "-i", str(path), "-t", "0.6", "-pix_fmt", "yuv420p", str(video)])
+        path = video
+    media = {} if media_type == "text" else {media_type: (path,) if media_type == "frames" else path}
+    condition = {"video": "T+V", "frames": "T+V+A_sep", "audio": "T+A", "text": "T_neutral"}[media_type]
+    args = dict(item_id="ground", direction="ja2zh", condition=condition, source="はし", context=[], media=media)
+    visual = media_type in {"video", "frames"}
+    for enabled in (True, False):
+        settings.values["prompt_modes"]["object_grounding"] = enabled
+        for mode in ("guided", "perceive", "compare"):
+            result, logs = translator.line(mode=mode, **args)
+            assert len(logs) == 1 + int(mode == "perceive" and bool(media))
+            final = backend.calls[-1].user
+            assert (settings.prompts["visual_object_note"] in final) == (visual and enabled and mode != "compare")
+            assert bool((result["observation"] or {}).get("object_evidence")) == (
+                visual and enabled and mode == "perceive"
+            )
+
+
+@pytest.mark.parametrize("with_audio", [True, False])
+def test_uniform_video_abstains_from_object_observation(tmp_path, with_audio):
+    settings = replace(Settings.load(), root=tmp_path)
+    frame = tmp_path / "gray.ppm"
+    frame.write_bytes(b"P6\n48 32\n255\n" + bytes([120]) * 48 * 32 * 3)
+    video = tmp_path / "gray.mp4"
+    ffmpeg(settings, ["-loop", "1", "-i", str(frame), "-t", "0.3", "-pix_fmt", "yuv420p", str(video)])
+    backend = Mock()
+    media = {"video": video, "interleaved": True} if with_audio else {"frames": (frame,)}
+    out, logs = Translator(settings, backend).line(
+        item_id="blank",
+        source="はし",
+        context=[],
+        direction="ja2zh",
+        mode="perceive",
+        condition="T+V+A" if with_audio else "T+V",
+        media=media,
+    )
+    assert "无法辨认" in out["observation"]["object_evidence"]
+    assert [x["task"] for x in logs] == (["observe", "translate"] if with_audio else ["translate"])
+    assert all("5." not in request.user for request in backend.calls)
+    assert settings.prompts["blank_visual_note"] in backend.calls[-1].user
+
+
+def test_scoped_video_glossary_and_joint_subtitle_checks(tmp_path):
+    from cjvmt.config import parse_glossary
+
+    glossary = parse_glossary("唐河县 | 唐河県\n方言 | 方言 | ほうげん")
+    settings = replace(Settings.load(), root=tmp_path, glossary=glossary)
+    for bad in ("没有分隔符", "a | x\na | y", "a | x | invalid", "a | x | | b"):
+        with pytest.raises(ValueError):
+            parse_glossary(bad)
+    assert "唐河県" in settings.terminology_note("来自唐河县") and settings.terminology_note("来自汤鹤县") == ""
+    legacy = replace(
+        settings, glossary=({"source": "唐河县", "target": "唐河県", "reading": "", "aliases": ["汤鹤县"]},)
+    )
+    assert not legacy.matched_terms("来自汤鹤县")
+
+    class JointBackend(Mock):
+        response = "1. 唐河県は\\n2. 両省の境にあります。"
+
+        def generate(self, request):
+            self.calls.append(request)
+            if request.task == "joint_translation":
+                return {
+                    "text": '{"action":"join","translation":"唐河県は両省の境にあります。"}',
+                    "peak_vram_mib": None,
+                    "output_tokens": None,
+                }
+            return {"text": self.response.replace("\\n", "\n"), "peak_vram_mib": None, "output_tokens": None}
+
+    backend = JointBackend()
+    tr = Translator(settings, backend)
+    for gap, response, adopt in [
+        (10, "1. 唐河県は\n2. 両省の境にあります。", True),
+        (20, "唐河県は境にあります。", False),
+        (30, "1. あの県は\n2. 境です。", False),
+        (900, "", False),
+    ]:
+        backend.response = response
+        a, b = {"text": "唐河県は境にあります。"}, {"text": "交差点です。"}
+        pred = tr.refine_boundary(
+            a,
+            b,
+            left_source="唐河县位于两省的",
+            right_source="交界处",
+            gap_ms=gap,
+            direction="zh2ja",
+            condition="T+V+A_sep",
+            item_id=str(gap),
+        )
+        assert ("joint_with" in a) == ("joint_with" in b) == adopt
+        assert bool(pred) == (gap < 650)
+        if adopt:
+            assert (a["text"], b["text"]) == ("唐河県は", "両省の境にあります。")
+
+
+@pytest.mark.parametrize(
+    ("action", "left", "right", "adopt"),
+    [
+        ('{"action":"join","translation":"記録を消します。"}', "现在请把所有记录。", "全部删除。", True),
+        ('{"action":"keep"}', "门锁好了。", "月亮升起来了。", False),
+        ("格式错误", "月が出ました。", "鍵を探しています。", False),
+    ],
+)
+def test_boundary_uses_both_utterances_without_registered_terms(tmp_path, action, left, right, adopt):
+    class Judge(Mock):
+        def generate(self, req):
+            if req.task == "joint_translation":
+                assert left in req.user and right in req.user
+                return {"text": action}
+            assert req.task == "joint_captions"
+            return {"text": "1. 記録を\n2. 消します。"}
+
+    tr = Translator(replace(Settings.load(), root=tmp_path), Judge())
+    a, b = {"text": "A"}, {"text": "B"}
+    calls = tr.refine_boundary(
+        a, b, left_source=left, right_source=right, gap_ms=0, direction="zh2ja", condition="T_asr", item_id="blind"
+    )
+    assert len(calls) == (2 if adopt else 1)
+    assert bool(a.get("joint_with")) == adopt
+    if not adopt:
+        assert (a["text"], b["text"]) == ("A", "B")

@@ -1,9 +1,10 @@
-"""Subprocess entry point for an existing vLLM-Omni installation."""
+"""Subprocess entry point for an existing vLLM-Omni installation (supports single & batched requests)."""
 
 import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Thread
 
@@ -86,6 +87,7 @@ def main() -> None:
     pynvml.nvmlInit()
     handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     engine = Omni(model=model, deploy_config=deploy, init_timeout=600)
+    prep_pool = ThreadPoolExecutor(max_workers=4)
     print(json.dumps({"ready": True}), file=protocol)
     try:
         for line in sys.stdin:
@@ -99,17 +101,45 @@ def main() -> None:
             monitor = Thread(target=measure, daemon=True)
             monitor.start()
             try:
-                request = json.loads(line)
-                params = SamplingParams(temperature=0, max_tokens=request["max_tokens"], seed=int(seed))
-                results = engine.generate([payload(request)], [params], py_generator=False)
-                result = next(item.outputs[0] for item in results if item.final_output_type == "text")
-                peaks.append(pynvml.nvmlDeviceGetMemoryInfo(handle).used)
-                message = {
-                    "text": result.text,
-                    "output_tokens": len(result.token_ids),
-                    "peak_vram_mib": round(max(peaks) / 2**20, 2),
-                    "vram_measurement": "NVML device used",
-                }
+                raw_msg = json.loads(line)
+                if "batch" in raw_msg:
+                    reqs = raw_msg["batch"]
+                    payloads = list(prep_pool.map(payload, reqs))
+                    max_tok = max(int(r["max_tokens"]) for r in reqs)
+                    params = SamplingParams(temperature=0, max_tokens=max_tok, seed=int(seed))
+                    results = engine.generate(payloads, [params], py_generator=False)
+                    ordered: list[dict | None] = [None] * len(reqs)
+                    for item in results:
+                        if item.final_output_type != "text":
+                            continue
+                        idx = int(str(item.request_id).split("_", 1)[0])
+                        out = item.outputs[0]
+                        ordered[idx] = {
+                            "text": out.text,
+                            "output_tokens": len(out.token_ids),
+                        }
+                    peaks.append(pynvml.nvmlDeviceGetMemoryInfo(handle).used)
+                    peak_mib = round(max(peaks) / 2**20, 2)
+                    if any(entry is None for entry in ordered):
+                        raise RuntimeError("批处理推理返回条目不完整。")
+                    message = {
+                        "batch": [
+                            {**entry, "peak_vram_mib": peak_mib, "vram_measurement": "NVML device used"}
+                            for entry in ordered
+                        ]
+                    }
+                else:
+                    request = raw_msg
+                    params = SamplingParams(temperature=0, max_tokens=request["max_tokens"], seed=int(seed))
+                    results = engine.generate([payload(request)], [params], py_generator=False)
+                    result = next(item.outputs[0] for item in results if item.final_output_type == "text")
+                    peaks.append(pynvml.nvmlDeviceGetMemoryInfo(handle).used)
+                    message = {
+                        "text": result.text,
+                        "output_tokens": len(result.token_ids),
+                        "peak_vram_mib": round(max(peaks) / 2**20, 2),
+                        "vram_measurement": "NVML device used",
+                    }
             except Exception as error:
                 message = {"error": f"{type(error).__name__}: {error}"}
             finally:
@@ -117,6 +147,7 @@ def main() -> None:
                 monitor.join()
             print(json.dumps(message, ensure_ascii=False), file=protocol)
     finally:
+        prep_pool.shutdown(wait=False)
         engine.close()
         pynvml.nvmlShutdown()
 

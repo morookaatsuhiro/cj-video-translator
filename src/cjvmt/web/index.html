@@ -4,110 +4,358 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f5f7f8">
-  <title>CJ-VMT · 中日多模态翻译</title>
-  <link rel="stylesheet" href="./app.css?v=20261125-speakers">
+  <title>CJ-VMT · 中日多模态视频翻译</title>
+  <link rel="stylesheet" href="./app.css?v=20261127-2">
   <script id="app-data" type="application/json">__CJVMT_DATA__</script>
   <script defer src="./webcam.js?v=20261125-progress"></script>
-  <script defer src="./app.js?v=20261125-speakers"></script>
+  <script defer src="./app.js?v=20261127-2"></script>
 </head>
 <body>
   <header class="top"><div class="shell top-inner">
-    <a class="brand" href="./index.html"><span class="brand-icon" aria-hidden="true">文</span> CJ<span>—</span>VMT</a>
+    <a class="brand" href="./index.html">
+      <span class="brand-icon" aria-hidden="true">文</span>
+      <span class="brand-text">CJ<span>—</span>VMT</span>
+    </a>
     <nav aria-label="工作区">
       <button type="button" data-tab="live">实时翻译</button>
       <button type="button" data-tab="replay">结果回放</button>
       <button type="button" data-tab="experiment" hidden>对照实验</button>
     </nav>
   </div></header>
+
   <main class="shell">
     <p class="banner" id="mock-notice" hidden>Mock 示例，不是真实结果</p>
-    <div class="job-progress" id="job-progress" hidden>
-      <div class="job-progress-heading">
-        <strong id="job-phase" role="status"></strong>
-        <span id="job-percent"></span>
-      </div>
-      <progress id="job-bar" aria-labelledby="job-phase"></progress>
-      <p class="subtle" id="job-progress-detail"></p>
-    </div>
+
+    <!-- ===================== TAB 1: LIVE ===================== -->
     <section id="live" hidden>
-      <div class="setup">
-        <div class="workspace-heading"><h1>中日视频翻译</h1><span class="subtle" id="input-limit"></span></div>
+      <div class="card setup-card">
+        <div class="setup-header">
+          <h1>中日视频翻译</h1>
+          <span class="subtle" id="input-limit"></span>
+        </div>
+
         <form id="job-form">
-          <fieldset class="source-tabs"><legend class="visually-hidden">视频来源</legend>
-            <label><input type="radio" name="source" value="upload" checked><span>上传视频</span></label>
-            <label><input type="radio" name="source" value="webcam"><span>摄像头</span></label>
-            <label><input type="radio" name="source" value="sample"><span>示例片段</span></label>
-          </fieldset>
+          <div class="source-row">
+            <fieldset class="source-tabs"><legend class="visually-hidden">视频来源</legend>
+              <label><input type="radio" name="source" value="upload" checked><span>上传视频</span></label>
+              <label><input type="radio" name="source" value="webcam"><span>摄像头</span></label>
+              <label><input type="radio" name="source" value="sample"><span>示例片段</span></label>
+            </fieldset>
+            <label class="toggle dub-pill" id="dub-request" hidden>
+              <input name="dub" type="checkbox" value="1" checked disabled>
+              <span>同时生成 AI 配音（限本人或已获许可的声音）</span>
+            </label>
+          </div>
+
           <div class="input-grid">
-            <label class="upload" id="upload-source"><span class="upload-icon" aria-hidden="true">↑</span><span><strong>选择视频</strong><small id="file-name">MP4 · MOV · WebM</small></span><input name="video" type="file" accept="video/*"></label>
-            <label id="sample-source" hidden><span class="visually-hidden">示例片段</span><select name="sample" id="sample"><option value="">选择示例片段</option></select></label>
-            <div class="source-camera subtle" id="camera-source" hidden>摄像头和麦克风</div>
+            <label class="upload" id="upload-source">
+              <span class="upload-icon" aria-hidden="true">↑</span>
+              <span><strong>选择本地视频</strong><small id="file-name">MP4 · MOV · WebM</small></span>
+              <input name="video" type="file" accept="video/*">
+            </label>
+            <label id="sample-source" hidden>
+              <span class="visually-hidden">示例片段</span>
+              <select name="sample" id="sample"><option value="">选择内置演示片段…</option></select>
+            </label>
+            <div class="source-camera" id="camera-source" hidden>
+              <span class="camera-dot" aria-hidden="true"></span>
+              <span>使用本机摄像头与麦克风实时采集（需在 localhost 或 HTTPS 下授权）</span>
+            </div>
             <button class="primary" id="start" type="submit" disabled>开始翻译 <span aria-hidden="true">→</span></button>
           </div>
-          <label class="toggle replay-caption" id="dub-request" hidden><input name="dub" type="checkbox" value="1"> 生成 AI 配音 · 我已取得说话人许可</label>
-          <details class="advanced"><summary>高级设置</summary><div class="advanced-fields">
-            <label>语向<select name="direction" id="direction"><option value="auto">自动识别中文或日语</option><option value="ja2zh">日语 → 中文</option><option value="zh2ja">中文 → 日语</option></select></label>
-            <label>翻译模式<select name="mode"><option value="auto">自动 · 实时引导，离线对比</option><option value="compare">对比</option><option value="guided">引导 · 保留语气</option><option value="perceive">先感知后翻译</option></select></label>
-            <label id="workflow-setting">处理方式<select name="workflow"><option value="live">按原速翻译</option><option value="offline">离线分析 · 四条件</option></select></label>
-            <label id="qwen-asr-setting" class="toggle" hidden><input type="checkbox" name="qwen_recheck" value="1" disabled> 用 Qwen3-ASR 再听一遍</label>
-            <label class="asr-hotwords">识别热词（可选）<input type="text" name="hotwords" maxlength="160" placeholder="用逗号分隔人名、地名或术语" autocomplete="off"></label>
-          </div></details>
+
+          <details class="advanced">
+            <summary>高级设置</summary>
+            <div class="advanced-fields">
+              <label>语向
+                <select name="direction" id="direction">
+                  <option value="auto">自动识别中文或日语</option>
+                  <option value="ja2zh">日语 → 中文</option>
+                  <option value="zh2ja">中文 → 日语</option>
+                </select>
+              </label>
+              <label>翻译模式
+                <select name="mode">
+                  <option value="auto">自动 · 极速感知，实时引导，离线对比</option>
+                  <option value="compare">对比（仅改变模态输入）</option>
+                  <option value="guided">引导 · 保留语气</option>
+                  <option value="perceive">先感知后翻译（物体线索与语气）</option>
+                </select>
+              </label>
+              <label id="workflow-setting">处理方式
+                <select name="workflow">
+                  <option value="fast" selected>极速全速处理（免等原速播放，推荐上传）</option>
+                  <option value="live">按原速实时模拟播放</option>
+                  <option value="offline">离线分析 · 四条件对照</option>
+                </select>
+              </label>
+              <span id="fast-asr-note" hidden>极速模式会逐句复听原声，自动核对两遍识别的分歧</span>
+              <label id="qwen-asr-setting" class="toggle qwen-asr-pill" hidden>
+                <input type="checkbox" name="qwen_recheck" value="1" disabled>
+                <span>用 Qwen3-ASR-1.7B 再听一遍（离线复核纠错）</span>
+              </label>
+            </div>
+          </details>
         </form>
+
+        <div class="job-progress" id="job-progress" hidden>
+          <div class="job-progress-heading">
+            <strong id="job-phase" role="status"></strong>
+            <span id="job-percent"></span>
+          </div>
+          <progress id="job-bar" aria-labelledby="job-phase"></progress>
+          <p class="subtle" id="job-progress-detail"></p>
+        </div>
       </div>
+
       <div class="workspace">
-        <article class="card player-card"><div class="section-head"><h2>视频</h2><span class="chip" id="status" role="status">等待输入</span></div><div class="player" id="live-player"><video id="live-video" playsinline hidden></video><div class="empty-video" id="live-empty"><span aria-hidden="true">▷</span>暂无视频</div><div id="overlay" class="overlay" hidden></div></div><div class="player-tools"><span class="subtle" id="live-audio" hidden>原声</span><button id="resume-play" class="secondary" type="button" hidden>开始播放</button><label id="live-sound" class="toggle" hidden><input id="live-mute" type="checkbox"> 静音</label><button id="stop-camera" class="secondary" type="button" hidden>结束录制</button><button id="open-result" class="text-link" type="button" hidden>打开回放</button><a id="live-video-download" class="text-link" download hidden>下载原声视频</a></div></article>
-        <article class="card transcript"><div class="section-head"><div><h2>双语字幕</h2><p class="subtle" id="detected-language">自动识别语向</p></div><a id="live-srt" class="text-link" download hidden>下载 SRT ↓</a></div><div id="live-lines" class="live-lines" aria-live="polite"><p class="empty">暂无字幕</p></div></article>
+        <article class="card player-card">
+          <div class="section-head">
+            <h2>视频画面</h2>
+            <span class="chip" id="status" role="status">等待输入</span>
+          </div>
+          <div class="player" id="live-player">
+            <video id="live-video" playsinline hidden></video>
+            <div class="empty-video" id="live-empty">
+              <span aria-hidden="true">▷</span>
+              <strong>选择示例、上传视频或开启摄像头</strong>
+              <small>点击「开始翻译」后将同步展示视频与两阶段双语字幕</small>
+            </div>
+            <div id="overlay" class="overlay" hidden></div>
+          </div>
+          <div class="player-tools media-bar">
+            <span class="subtle" id="live-audio" hidden>原声</span>
+            <button id="resume-play" class="secondary" type="button" hidden>开始播放</button>
+            <label id="live-sound" class="toggle" hidden><input id="live-mute" type="checkbox"> 静音</label>
+            <button id="stop-camera" class="danger-btn" type="button" hidden>结束录制</button>
+            <span class="spacer"></span>
+            <button id="open-result" class="secondary" type="button" hidden>在结果回放中查看 →</button>
+            <a id="live-video-download" class="text-link" download hidden>下载原声视频</a>
+          </div>
+        </article>
+
+        <article class="card transcript">
+          <div class="section-head">
+            <div class="head-inline">
+              <h2>双语字幕</h2>
+              <span class="subtle" id="detected-language">自动识别语向</span>
+            </div>
+            <a id="live-srt" class="text-link" download hidden>下载 SRT ↓</a>
+          </div>
+          <div id="live-lines" class="live-lines" aria-live="polite">
+            <p class="empty">暂无字幕</p>
+          </div>
+        </article>
       </div>
-      <details class="metrics" id="metrics" hidden><summary>会话延迟</summary><div id="metrics-values" class="metrics-grid"></div><a id="metrics-csv" class="text-link" download>下载 CSV ↓</a></details>
+
+      <details class="card metrics-card" id="metrics" hidden>
+        <summary>会话延迟与阶段耗时明细</summary>
+        <div id="metrics-values" class="metrics-wrap"></div>
+        <div class="metrics-footer"><a id="metrics-csv" class="text-link" download>下载延迟数据 CSV ↓</a></div>
+      </details>
     </section>
+
+    <!-- ===================== TAB 2: REPLAY (SIMPLIFIED & INTUITIVE) ===================== -->
     <section id="replay" hidden>
-      <div class="workspace-heading"><h1>结果回放</h1></div>
-      <div class="replay-bar"><label>会话<select id="run-select"></select></label><label id="replay-condition">字幕条件<select id="download-condition"></select></label><a class="secondary" id="download" download hidden>下载双语 SRT ↓</a></div>
+      <!-- Clean Session History Manager: Filter, Search, Storage & 1-click Cards -->
+      <div class="replay-selector">
+        <div class="history-toolbar" id="history-toolbar">
+          <div class="filter-pills" id="history-filters" role="group" aria-label="筛选历史会话">
+            <button type="button" data-filter="all" aria-pressed="true">全部</button>
+            <button type="button" data-filter="dub" aria-pressed="false">含 AI 配音</button>
+            <button type="button" data-filter="zh2ja" aria-pressed="false">中 → 日</button>
+            <button type="button" data-filter="ja2zh" aria-pressed="false">日 → 中</button>
+          </div>
+          <input type="search" id="history-search" class="history-search" placeholder="搜索会话名称或台词…" aria-label="搜索历史会话">
+          <span class="spacer"></span>
+          <div class="storage-tools" id="storage-tools" hidden>
+            <span class="subtle" id="storage-info"></span>
+            <button type="button" id="cleanup-runs" class="secondary compact-btn" hidden>一键清理</button>
+          </div>
+        </div>
+        <div class="session-cards" id="session-cards" role="listbox" aria-label="选择演示会话"></div>
+        <p class="subtle history-empty" id="history-empty" hidden>没有符合当前筛选条件的历史会话。</p>
+        <select id="run-select" class="visually-hidden" aria-hidden="true"></select>
+      </div>
+
       <div id="no-replay" class="card empty" hidden>暂无可回放的视频。</div>
+
       <div id="replay-content" hidden>
-        <div class="workspace">
+        <!-- Focused 2-column stage: Video + Bilingual Timeline -->
+        <div class="workspace replay-stage">
           <article class="card player-card">
-            <div class="section-head"><h2>视频回放</h2><button id="full-video" class="text-link" type="button" hidden>返回完整视频</button></div>
-            <div class="player-tools" id="dub-switch" hidden><label>播放版本<select id="replay-version"><option value="dub">AI 合成配音</option><option value="original">原声</option></select></label><a id="dub-download" class="text-link" download="AI-dub.mp4">下载配音 MP4</a></div>
+            <div class="stage-head">
+              <div class="stage-title">
+                <h2 id="replay-title">视频回放</h2>
+                <span class="subtle" id="replay-meta"></span>
+                <div class="run-actions" id="run-actions" hidden>
+                  <button type="button" id="rename-run" class="ghost-btn">重命名</button>
+                  <button type="button" id="delete-run" class="ghost-btn danger-text">删除</button>
+                </div>
+              </div>
+              <div class="head-actions">
+                <div class="seg-switch" id="dub-switch" hidden role="group" aria-label="切换原声或 AI 配音">
+                  <button type="button" data-ver="original">原声</button>
+                  <button type="button" data-ver="dub" id="dub-ver-btn">AI 合成配音</button>
+                  <select id="replay-version" class="visually-hidden" aria-hidden="true">
+                    <option value="dub">AI 合成配音</option>
+                    <option value="original">原声</option>
+                  </select>
+                </div>
+                <button id="full-video" class="secondary compact-btn" type="button" hidden>返回完整视频</button>
+              </div>
+            </div>
+
             <div class="player"><video id="replay-video" controls playsinline></video></div>
-            <div class="player-tools"><span class="subtle" id="replay-buffer" role="status" hidden></span><button id="retry-replay" class="text-link" type="button" hidden>重新加载</button><a id="replay-video-download" class="text-link" download hidden>下载原声视频</a></div>
-            <label class="toggle replay-caption" id="replay-caption" hidden><input id="captions" type="checkbox" checked> 双语字幕</label>
-            <label class="toggle replay-caption" id="replay-format" hidden><input id="replay-compat" type="checkbox" checked> 兼容播放</label>
-            <p class="subtle" id="replay-meta"></p><a class="text-link" id="attribution" target="_blank" rel="noopener" hidden></a>
-            <form class="player-tools" id="dub-form" hidden><label class="toggle"><input name="consent" type="checkbox" value="1" required> 我已取得说话人配音许可</label><button class="secondary" type="submit">生成配音</button></form>
-            <p class="subtle" id="dub-status" role="status" hidden></p>
+
+            <div class="stage-foot">
+              <label class="toggle" id="replay-caption" hidden><input id="captions" type="checkbox" checked> 画面字幕</label>
+              <span class="prosody-note" id="dub-prosody-pill" hidden></span>
+              <span class="prosody-note" id="dub-timing-pill" hidden></span>
+              <span class="subtle" id="replay-buffer" role="status" hidden></span>
+              <button id="retry-replay" class="text-link" type="button" hidden>重新加载</button>
+              <span class="spacer"></span>
+              <a class="subtle-link" id="attribution" target="_blank" rel="noopener" hidden></a>
+            </div>
+
+            <form class="dub-callout" id="dub-form" hidden>
+              <label class="toggle"><input name="consent" type="checkbox" value="1" required> 已取得说话人许可，生成跨语种 AI 配音</label>
+              <button class="secondary compact-btn" type="submit">生成 AI 配音</button>
+            </form>
+            <p class="subtle dub-msg" id="dub-status" role="status" hidden></p>
             <progress id="dub-progress" aria-labelledby="dub-status" hidden></progress>
           </article>
+
           <article class="card transcript">
-            <div class="section-head"><h2>双语字幕</h2><button id="switch-pair" class="text-link" type="button" hidden>查看另一版</button></div>
-            <div id="speaker-panel" class="speaker-panel" hidden>
-              <div class="player-tools"><button id="analyze-speakers" class="secondary" type="button">分析人物和语气</button><a id="speaker-download" class="text-link" download="人物与语气.json" hidden>下载人物标注</a></div>
-              <label id="speaker-tone-option" class="toggle"><input id="speaker-tone-model" type="checkbox" checked> 推测语气（需要加载翻译模型）</label>
-              <p id="speaker-status" class="subtle" role="status" hidden></p>
+            <div class="stage-head">
+              <h2>双语字幕</h2>
+              <div class="head-actions">
+                <label class="inline-cond" id="replay-condition" hidden>
+                  <span class="visually-hidden">字幕条件</span>
+                  <select id="download-condition"></select>
+                </label>
+                <button id="switch-pair" class="secondary compact-btn" type="button" hidden>查看另一版</button>
+              </div>
+            </div>
+            <div id="replay-lines" class="live-lines replay-list"></div>
+          </article>
+        </div>
+
+        <!-- Single-surface 3-tab Detail Panel (zero duplicate walls of text!) -->
+        <div class="card detail-panel">
+          <div class="subtabs" role="tablist" aria-label="回放详情视图">
+            <button type="button" role="tab" data-subtab="compare" aria-selected="true" id="tab-btn-compare">译文对比</button>
+            <button type="button" role="tab" data-subtab="analysis" aria-selected="false" id="tab-btn-analysis">人物、语气与识别详情</button>
+            <button type="button" role="tab" data-subtab="export" aria-selected="false" id="tab-btn-export">延迟与文件导出</button>
+          </div>
+
+          <!-- Sub-tab 1: Clean Translation Comparison -->
+          <div class="subpanel" id="subpanel-compare">
+            <div class="subpanel-bar">
+              <p class="subtle" id="comparison-note">浅黄高亮标出加入声音/画面后的译文变化；点击左侧时间可跳转对应视频片段。</p>
+              <label id="changed-filter" class="toggle"><input id="changed-only" type="checkbox"> 只看有变化的句子</label>
+            </div>
+            <div class="table-wrap" id="compare-table"></div>
+          </div>
+
+          <!-- Sub-tab 2: Speaker / Lip-Sync / Prosody / Tone / ASR Recheck -->
+          <div class="subpanel" id="subpanel-analysis" hidden>
+            <div id="speaker-panel" class="analysis-action-bar" hidden>
+              <div class="speaker-controls">
+                <button id="analyze-speakers" class="secondary compact-btn" type="button">分析人物和语气</button>
+                <label id="speaker-tone-option" class="toggle"><input id="speaker-tone-model" type="checkbox" checked> 同时推测语气</label>
+                <span id="speaker-status" class="subtle" role="status" hidden></span>
+              </div>
               <progress id="speaker-progress" aria-labelledby="speaker-status" hidden></progress>
               <ul id="speaker-summary" class="speaker-summary" hidden></ul>
             </div>
-            <div id="replay-lines" class="live-lines"></div>
-            <details id="replay-line-details"><summary>逐句详情 <span id="selected-id"></span></summary><div id="selected-line" class="selected-line"></div></details>
-          </article>
+
+            <div class="selected-banner">
+              <span class="subtle">当前选中句子</span>
+              <strong id="selected-id"></strong>
+              <span class="subtle">（点击上方双语字幕任意一行即可切换）</span>
+            </div>
+            <div id="selected-line" class="selected-line"></div>
+          </div>
+
+          <!-- Sub-tab 3: Latency & Unified Downloads -->
+          <div class="subpanel" id="subpanel-export" hidden>
+            <div id="replay-metrics" hidden>
+              <h3 class="sub-heading">实时处理延迟统计</h3>
+              <div id="replay-metrics-values" class="metrics-wrap"></div>
+            </div>
+
+            <h3 class="sub-heading">下载与播放选项</h3>
+            <div class="export-grid">
+              <a class="export-item" id="download" download hidden>
+                <strong>双语字幕（SRT）</strong>
+                <span>当前所选条件的时间轴双语字幕</span>
+              </a>
+              <a class="export-item" id="dub-download" download="AI-dub.mp4" hidden>
+                <strong>AI 配音视频（MP4）</strong>
+                <span>保留原画面，含译制音轨、原声备轨与 AI 标识</span>
+              </a>
+              <a class="export-item" id="replay-video-download" download hidden>
+                <strong>原声视频（MP4）</strong>
+                <span>标准化后的源视频与原始音轨</span>
+              </a>
+              <a class="export-item" id="speaker-download" download="人物与语气.json" hidden>
+                <strong>人物与语气标注（JSON）</strong>
+                <span>说话人聚类、口型位置与基频统计</span>
+              </a>
+              <a class="export-item" id="replay-csv" download hidden>
+                <strong>会话延迟记录（CSV）</strong>
+                <span>逐句各阶段耗时中位数与 P90</span>
+              </a>
+            </div>
+
+            <div class="compat-row" id="replay-format" hidden>
+              <label class="toggle" title="仅当当前浏览器无法正常播放 MP4 画面时勾选"><input id="replay-compat" type="checkbox"> 使用 WebM 兼容格式播放（部分浏览器画面异常时开启）</label>
+              <button type="button" id="redub-btn" class="secondary compact-btn" hidden>重新生成 AI 配音（双向语速对齐）</button>
+            </div>
+          </div>
         </div>
-        <details class="metrics" id="replay-metrics" hidden><summary>会话延迟</summary><div id="replay-metrics-values" class="metrics-grid"></div><a id="replay-csv" class="text-link" download>下载 CSV ↓</a></details>
-        <details class="comparisons replay-comparisons"><summary id="table-title">译文对比</summary><label id="changed-filter" class="toggle"><input id="changed-only" type="checkbox"> 只看有差异的句子</label><div class="table-wrap" id="compare-table"></div><p class="subtle" id="comparison-note">高亮表示表述发生变化。问句与文体标签来自规则检查。</p></details>
       </div>
     </section>
+
+    <!-- ===================== TAB 3: EXPERIMENT (STORY-FIRST & VISUAL) ===================== -->
     <section id="experiment" hidden>
-      <div class="card comparisons">
-        <div class="section-head"><h2>WMT26 中→日语音评测</h2></div>
-        <p id="experiment-meta" class="subtle"></p>
-        <div class="experiment-filters"><label>画面分组<select id="experiment-stratum"></select></label><label>指标<select id="experiment-metric"></select></label></div>
-        <div class="table-wrap" id="experiment-table"></div>
+      <!-- Plain-language Executive Summary -->
+      <div class="card exp-summary">
+        <div class="exp-summary-head">
+          <div>
+            <h1>声音和画面真的帮到了视频翻译吗？</h1>
+            <p class="subtle" id="experiment-meta"></p>
+          </div>
+        </div>
+        <div class="takeaways" id="experiment-kpis"></div>
       </div>
-      <div class="experiment-figures" id="experiment-figures"></div>
+
+      <!-- Interactive Grouped Visual Chart -->
+      <div class="card exp-chart-card">
+        <div class="exp-controls">
+          <div class="metric-pills" id="experiment-metric-pills" role="group" aria-label="快捷切换核心评测指标"></div>
+          <div class="exp-selects">
+            <label>画面分组<select id="experiment-stratum"></select></label>
+            <label>全部指标<select id="experiment-metric"></select></label>
+          </div>
+        </div>
+
+        <p class="metric-explain" id="experiment-metric-explain"></p>
+        <div class="visual-chart" id="experiment-visual-chart"></div>
+      </div>
+
+      <!-- Collapsible Raw Numbers & Original Paper Charts -->
+      <details class="card exp-raw-details">
+        <summary>查看完整统计明细表与原始论文柱状图</summary>
+        <div class="table-wrap" id="experiment-table" style="margin-top:12px;"></div>
+        <div class="experiment-figures" id="experiment-figures" style="margin-top:16px;"></div>
+      </details>
     </section>
+
     <section id="classroom-materials" class="classroom-materials" hidden aria-labelledby="classroom-title">
       <h2 id="classroom-title">课程材料</h2><ul id="classroom-links"></ul>
     </section>
-    <footer>结课系统原型 · 演示样本量有限 · 数据集建设未开展</footer>
   </main>
 </body>
 </html>
